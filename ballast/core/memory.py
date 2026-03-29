@@ -1,0 +1,540 @@
+"""ballast/core/memory.py — three-layer agent memory.
+
+Port of GroundWire memory.py with three changes:
+  1. Web-specific imports removed (guardrails, llm_utils, schemas)
+  2. Half-life–based temporal decay replaces flat _DECAY_RATE constant
+  3. consolidate() filters success=False runs before semantic synthesis
+
+Storage: .ballast_memory/<scope>.json
+Schema:
+  {
+    "quirks":           [{"text": str, "confidence": float, "last_seen": float}],
+    "runs":             [{"id": str, "goal": str, "timestamp": float,
+                          "step_count": int, "success": bool, "is_trial": bool}],
+    "semantic_profile": str,
+    "run_count":        int,
+    "last_consolidated": float
+  }
+
+Public interface:
+    recall, write, extract_quirks, log_run, consolidate,
+    atomic_write_json, memory_report, patch_quirk
+"""
+from __future__ import annotations
+
+import json
+import math
+import os
+import tempfile
+import time
+from pathlib import Path
+
+import anthropic
+from filelock import FileLock
+from pydantic import BaseModel
+
+MEMORY_DIR = Path(".ballast_memory")
+MEMORY_DIR.mkdir(exist_ok=True)
+
+# Semantic consolidation every N real (non-trial) runs.
+CONSOLIDATE_EVERY = 3
+
+_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+
+# Half-life for cross-run observation decay (30 days).
+# Tune this if agents over-rely on old context (increase) or miss relevant history (decrease).
+# Session-level decay (8h half-life) can be added via a decay_mode param to write() in Week 2.
+_HALF_LIFE_LONG_TERM_SECONDS: float = 30.0 * 86400   # 30 days
+
+_client: anthropic.Anthropic | None = None
+
+
+# ---------------------------------------------------------------------------
+# Pydantic schemas (inline — no external schemas.py dependency)
+# ---------------------------------------------------------------------------
+
+class _QuirksList(BaseModel):
+    quirks: list[str]
+
+
+class _SemanticProfile(BaseModel):
+    profile: str
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _get_client() -> anthropic.Anthropic:
+    """Lazy singleton — created on first LLM call."""
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic()
+    return _client
+
+
+def _decay_factor(half_life_seconds: float, elapsed_seconds: float) -> float:
+    """Exponential decay: returns gamma^elapsed where gamma = 0.5^(1/half_life).
+
+    Equivalent to exp(-ln(2) * elapsed / half_life).
+    Returns 1.0 for zero or negative elapsed time (no decay yet).
+
+    Args:
+        half_life_seconds: Time in seconds for confidence to halve.
+        elapsed_seconds:   Time elapsed since last observation.
+    """
+    if elapsed_seconds <= 0:
+        return 1.0
+    return math.exp(-math.log(2.0) * elapsed_seconds / half_life_seconds)
+
+
+def _scope_path(scope: str) -> Path:
+    """Sanitise scope string into a safe filename."""
+    safe = scope.replace(":", "_").replace("/", "_")
+    return MEMORY_DIR / f"{safe}.json"
+
+
+def _scope_lock(path: Path) -> FileLock:
+    """Per-scope advisory lock — serializes all read-modify-write operations."""
+    return FileLock(str(path.with_suffix(".lock")), timeout=10)
+
+
+def _empty_scope_data() -> dict:
+    """Canonical empty schema. Single source of truth for all functions."""
+    return {
+        "quirks": [],
+        "runs": [],
+        "semantic_profile": "",
+        "run_count": 0,
+        "last_consolidated": 0.0,
+    }
+
+
+def _parse_structured(
+    model: str,
+    max_tokens: int,
+    messages: list[dict],
+    response_model: type,
+) -> object:
+    """Call Claude with tool_use to enforce structured output.
+
+    Uses tool_choice = {"type": "tool", "name": "structured_output"} so the
+    model always returns the schema rather than free text.
+    """
+    schema = response_model.model_json_schema()
+    response = _get_client().messages.create(
+        model=model,
+        max_tokens=max_tokens,
+        tools=[
+            {
+                "name": "structured_output",
+                "description": "Return structured data in the required schema.",
+                "input_schema": schema,
+            }
+        ],
+        tool_choice={"type": "tool", "name": "structured_output"},
+        messages=messages,
+    )
+    for block in response.content:
+        if block.type == "tool_use":
+            return response_model(**block.input)
+    raise ValueError("Claude response contained no tool_use block")
+
+
+# ---------------------------------------------------------------------------
+# Public interface
+# ---------------------------------------------------------------------------
+
+def atomic_write_json(path: Path, data: dict) -> None:
+    """Persist JSON via temp file + os.replace (atomic on POSIX)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".tmp",
+        prefix=path.name + ".",
+        dir=str(path.parent),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def recall(scope: str) -> str:
+    """Return a stratified plain-English briefing for this scope.
+
+    Layer 1 (always): run count + confidence label.
+    Layer 2 (if exists): semantic profile sentence.
+    Layer 3 (if exists): top 10 observations sorted by confidence descending.
+    Returns "" if no memory exists. Never returns None.
+    """
+    path = _scope_path(scope)
+    if not path.exists():
+        return ""
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+
+    run_count = data.get("run_count", 0)
+    quirks = data.get("quirks", [])
+    semantic_profile = data.get("semantic_profile", "")
+
+    if run_count == 0 and not quirks and not semantic_profile:
+        return ""
+
+    if run_count >= 10:
+        confidence_label = "high"
+    elif run_count >= 4:
+        confidence_label = "medium"
+    else:
+        confidence_label = "low"
+
+    lines = [
+        f"Agent memory for {scope} — {run_count} run(s), confidence: {confidence_label}"
+    ]
+
+    if semantic_profile:
+        lines.append(f"  Strategic profile: {semantic_profile}")
+
+    if quirks:
+        dict_quirks = [q for q in quirks if isinstance(q, dict)]
+        sorted_quirks = sorted(
+            dict_quirks, key=lambda q: q.get("confidence", 1), reverse=True
+        )[:10]
+        lines.append("  Known observations:")
+        for q in sorted_quirks:
+            text = q.get("text", "")
+            conf = q.get("confidence", 1)
+            lines.append(f"    - {text} (confidence {conf:.2f})")
+
+    return "\n".join(lines)
+
+
+def write(scope: str, new_observations: list[str]) -> None:
+    """Upsert observations into the confidence map for this scope.
+
+    Re-seen observation → apply half-life decay then increment by 1.
+    New observation → insert with confidence=1.0.
+    Unseen observations in this batch → decay only (no increment).
+
+    Decay uses long-term half-life (30 days) — appropriate for cross-run memory.
+    """
+    new_observations = [o for o in list(new_observations) if o and o.strip()]
+    if not new_observations:
+        return
+
+    path = _scope_path(scope)
+    with _scope_lock(path):
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                data = _empty_scope_data()
+        else:
+            data = _empty_scope_data()
+
+        raw_quirks = data.get("quirks", [])
+        existing: dict[str, dict] = {}
+        now = time.time()
+
+        for q in raw_quirks:
+            if isinstance(q, str):
+                existing[q] = {"text": q, "confidence": 1.0, "last_seen": now}
+            elif isinstance(q, dict) and "text" in q:
+                existing[q["text"]] = q
+
+        new_set = set(new_observations)
+
+        # Decay observations not seen in this batch.
+        for text, q in existing.items():
+            if text not in new_set:
+                elapsed = now - float(q.get("last_seen", now))
+                q["confidence"] = max(
+                    0.1,
+                    float(q.get("confidence", 1.0))
+                    * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed),
+                )
+
+        # Update or insert observations seen in this batch.
+        for text in new_observations:
+            if text in existing:
+                prev = float(existing[text].get("confidence", 1.0))
+                last_seen = float(existing[text].get("last_seen", now))
+                elapsed = now - last_seen
+                decayed = prev * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed)
+                existing[text]["confidence"] = max(0.1, decayed + 1.0)
+                existing[text]["last_seen"] = now
+            else:
+                existing[text] = {"text": text, "confidence": 1.0, "last_seen": now}
+
+        data["quirks"] = list(existing.values())
+        atomic_write_json(path, data)
+
+
+def extract_quirks(events: list[dict], scope: str) -> list[str]:
+    """Ask Claude to extract agent-specific observations from events.
+
+    Uses head+tail sampling (first 10 + last 10) to capture early and late patterns.
+    Returns list[str]. Returns [] on any error — never raises.
+    """
+    if not events:
+        return []
+
+    head = events[:10]
+    tail = events[-10:] if len(events) > 10 else []
+    event_sample = json.dumps(head + tail, indent=2)
+
+    prompt = (
+        f"These are events from an AI agent working on scope: {scope}.\n"
+        "Identify agent-specific observations:\n"
+        "- Repeated failure patterns\n"
+        "- Tool call sequences that reliably succeed\n"
+        "- State transitions that indicate progress vs stalling\n"
+        "- Goal types that this agent handles well vs struggles with\n\n"
+        "Return a JSON object with a single key \"quirks\" whose value is an array of short strings.\n"
+        "No preamble. No markdown. If none, use {\"quirks\": []}.\n"
+        'Example: {"quirks": ["Multi-step tool chains succeed when the first tool call succeeds", '
+        '"Goals with ambiguous scope cause repeated clarification loops"]}\n\n'
+        f"Events:\n{event_sample}"
+    )
+
+    try:
+        out = _parse_structured(
+            model=_ANTHROPIC_MODEL,
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+            response_model=_QuirksList,
+        )
+        return [q for q in out.quirks if isinstance(q, str)]
+    except Exception:
+        return []
+
+
+def log_run(
+    scope: str,
+    goal: str,
+    events: list[dict],
+    success: bool = True,
+    is_trial: bool = False,
+) -> None:
+    """Append an episodic run entry. Increments run_count via len(runs).
+
+    is_trial=True marks eval-mode runs excluded from consolidation.
+    success=False marks failed runs excluded from semantic synthesis.
+    This function owns run_count — write() does not touch it.
+    """
+    path = _scope_path(scope)
+    with _scope_lock(path):
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                data = _empty_scope_data()
+        else:
+            data = _empty_scope_data()
+
+        run_entry = {
+            "id": str(int(time.time())),
+            "goal": goal,
+            "timestamp": time.time(),
+            "step_count": len(events),
+            "success": success,
+            "is_trial": is_trial,
+        }
+
+        runs = data.get("runs", [])
+        runs.append(run_entry)
+        data["runs"] = runs[-100:]  # cap at 100 most recent
+        data["run_count"] = len(data["runs"])
+
+        atomic_write_json(path, data)
+
+
+def consolidate(scope: str) -> bool:
+    """Every CONSOLIDATE_EVERY real successful runs, synthesize a semantic profile.
+
+    Filters applied before synthesis:
+      - is_trial=True runs excluded (eval goals bias the profile)
+      - success=False runs excluded (failed runs contaminate the synthesis)
+
+    Returns True if consolidation ran. Never raises.
+    """
+    path = _scope_path(scope)
+    if not path.exists():
+        return False
+
+    with _scope_lock(path):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return False
+
+        all_runs = data.get("runs", [])
+        # Only real, successful runs drive consolidation.
+        synthesis_runs = [
+            r for r in all_runs
+            if not r.get("is_trial", False) and r.get("success", True)
+        ]
+
+        if len(synthesis_runs) == 0 or len(synthesis_runs) % CONSOLIDATE_EVERY != 0:
+            return False
+
+        recent_runs = synthesis_runs[-20:]
+        runs_summary = json.dumps(
+            [
+                {
+                    "goal": r.get("goal"),
+                    "step_count": r.get("step_count"),
+                    "success": r.get("success"),
+                }
+                for r in recent_runs
+            ],
+            indent=2,
+        )
+
+        top_quirks = sorted(
+            data.get("quirks", []),
+            key=lambda q: q.get("confidence", 0) if isinstance(q, dict) else 0,
+            reverse=True,
+        )[:10]
+        quirks_summary = json.dumps(
+            [
+                {"text": q.get("text"), "confidence": q.get("confidence")}
+                for q in top_quirks
+            ],
+            indent=2,
+        )
+
+        prompt = (
+            f"You are analysing an AI agent's run history for scope: {scope}.\n"
+            f"Recent successful runs ({len(recent_runs)}):\n{runs_summary}\n\n"
+            f"Top observations (by confidence):\n{quirks_summary}\n\n"
+            "Write ONE sentence (max 40 words) strategic profile of this agent's behavior.\n"
+            "Focus on: reliability, common failure points, goal types that succeed vs struggle.\n"
+            'Return ONLY JSON: {"profile": "<your sentence ending with a period>"}'
+        )
+
+        try:
+            out = _parse_structured(
+                model=_ANTHROPIC_MODEL,
+                max_tokens=150,
+                messages=[{"role": "user", "content": prompt}],
+                response_model=_SemanticProfile,
+            )
+            data["semantic_profile"] = out.profile.strip()
+            data["last_consolidated"] = time.time()
+            atomic_write_json(path, data)
+            return True
+        except Exception:
+            return False
+
+
+def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
+    """Increment or decrement confidence on a single observation by delta.
+
+    Positive delta confirms the observation after a successful run.
+    Negative delta weakens an observation whose hypothesis wasn't confirmed.
+    Confidence clamped to [0.1, 10.0]. No-op if quirk_text not found. Never raises.
+    """
+    path = _scope_path(scope)
+    if not path.exists():
+        return
+    try:
+        with _scope_lock(path):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return
+            changed = False
+            for q in data.get("quirks", []):
+                if isinstance(q, dict) and q.get("text") == quirk_text:
+                    current = float(q.get("confidence", 1.0))
+                    q["confidence"] = round(max(0.1, min(10.0, current + delta)), 4)
+                    changed = True
+                    break
+            if changed:
+                atomic_write_json(path, data)
+    except Exception:
+        pass
+
+
+def memory_report(scope: str) -> str:
+    """Pretty-print accumulated memory for a scope. Never raises."""
+    path = _scope_path(scope)
+    if not path.exists():
+        return f"No memory for {scope} — no runs recorded yet."
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return f"Memory file for {scope} could not be read."
+
+    all_runs = data.get("runs", [])
+    real_runs = [r for r in all_runs if not r.get("is_trial", False)]
+    trial_runs = [r for r in all_runs if r.get("is_trial", False)]
+    run_count = data.get("run_count", 0)
+    semantic_profile = data.get("semantic_profile", "")
+    quirks = [q for q in data.get("quirks", []) if isinstance(q, dict)]
+
+    border = "═" * 67
+    lines = [
+        f"╔{border}╗",
+        f"║  Ballast Memory Report — {scope[:40]:<40}  ║",
+        f"╠{border}╣",
+    ]
+
+    run_line = (
+        f"  Runs: {run_count} total  "
+        f"({len(real_runs)} real · {len(trial_runs)} eval trials)"
+    )
+    lines.append(f"║{run_line:<67}║")
+
+    if real_runs:
+        success_count = sum(1 for r in real_runs if r.get("success", True))
+        avg_steps = sum(r.get("step_count", 0) for r in real_runs) / len(real_runs)
+        success_line = (
+            f"  Success: {success_count}/{len(real_runs)} real runs  "
+            f"·  avg {avg_steps:.1f} steps/run"
+        )
+        lines.append(f"║{success_line:<67}║")
+
+    if semantic_profile:
+        words = semantic_profile.split()
+        line_buf: list[str] = []
+        wrapped: list[str] = []
+        for word in words:
+            if sum(len(w) + 1 for w in line_buf) + len(word) > 63:
+                wrapped.append(" ".join(line_buf))
+                line_buf = [word]
+            else:
+                line_buf.append(word)
+        if line_buf:
+            wrapped.append(" ".join(line_buf))
+        lines.append(f"╠{border}╣")
+        lines.append(f"║  Profile:{'':>57}║")
+        for wline in wrapped:
+            lines.append(f"║    {wline:<63}║")
+
+    if quirks:
+        sorted_quirks = sorted(
+            quirks, key=lambda q: q.get("confidence", 0), reverse=True
+        )[:5]
+        lines.append(f"╠{border}╣")
+        lines.append(f"║  Top observations by confidence:{'':>34}║")
+        for q in sorted_quirks:
+            conf = q.get("confidence", 0)
+            text = q.get("text", "")[:50]
+            filled = min(5, int(conf))
+            bar = "█" * filled + "░" * (5 - filled)
+            lines.append(f"║  {bar} {conf:4.1f}x  {text:<50}  ║")
+
+    lines.append(f"╚{border}╝")
+    return "\n".join(lines)
