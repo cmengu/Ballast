@@ -23,3 +23,7 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Agent memory store
+.ballast_memory/
+.ballast_memory*.lock
