@@ -442,3 +442,219 @@ def _clarify(goal: str, scores: AmbiguityScores) -> list[str]:
     except Exception:
         pass
     return []
+
+
+# ---------------------------------------------------------------------------
+# Spec inference — used when policy decides not to ask
+# ---------------------------------------------------------------------------
+
+_INFER_PROMPT = """You are an intent grounding system. Given a goal string, infer a locked specification.
+
+Goal: {goal}
+Domain: {domain}
+
+Ambiguity analysis:
+- Attribute: {attr_reason} (score {attr_score:.2f})
+- Scope: {scope_reason} (score {scope_score:.2f})
+- Preference: {pref_reason} (score {pref_score:.2f})
+
+Produce a locked spec. Make reasonable default assumptions where ambiguous.
+Be conservative — prefer narrower scope over broader."""
+
+_INFER_TOOL = {
+    "name": "infer_spec",
+    "description": "Return a locked specification inferred from the goal.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "success_criteria": {"type": "string", "description": "Measurable definition of done — one sentence"},
+            "scope": {"type": "string", "description": "Boundary of what the agent may touch — one phrase or empty string"},
+            "constraints": {"type": "array", "items": {"type": "string"}, "description": "Hard constraints the agent must not violate"},
+            "output_format": {"type": "string", "description": "Required output format, or empty string"},
+            "inferred_assumptions": {"type": "array", "items": {"type": "string"}, "description": "Assumptions made when inferring the spec"},
+            "latent_goal": {"type": "string", "description": "Thematic label — 3 words max"},
+            "action_type": {"type": "string", "enum": ["READ", "WRITE", "TRANSFORM", "VERIFY", "SEARCH", "COORDINATE"]},
+            "salient_entity_types": {"type": "array", "items": {"type": "string"}, "description": "Entity types relevant to this goal"},
+        },
+        "required": ["success_criteria", "scope", "constraints", "output_format",
+                     "inferred_assumptions", "latent_goal", "action_type", "salient_entity_types"],
+    },
+}
+
+
+def _infer_spec(goal: str, domain: str, scores: AmbiguityScores) -> LockedSpec:
+    """Infer a LockedSpec from the goal without asking the user.
+
+    Called when ClarificationPolicy.should_ask() returns False.
+    Uses Claude tool_use (structured output) to fill in spec fields.
+    Also extracts the initial IntentSignal from the inference.
+
+    On error: returns a minimal valid LockedSpec with the raw goal as success_criteria
+    and empty scope — safe for the agent to run against with no constraints.
+
+    Args:
+        goal:   Raw goal string.
+        domain: Domain key (for context).
+        scores: Ambiguity scores (included in prompt for calibration context).
+    Returns:
+        LockedSpec (never raises).
+    """
+    from ballast.core.memory import get_domain_threshold
+
+    prompt = _INFER_PROMPT.format(
+        goal=goal,
+        domain=domain,
+        attr_reason=scores.attribute.reason,
+        attr_score=scores.attribute.score,
+        scope_reason=scores.scope.reason,
+        scope_score=scores.scope.score,
+        pref_reason=scores.preference.reason,
+        pref_score=scores.preference.score,
+    )
+
+    try:
+        response = _get_spec_client().messages.create(
+            model=_SPEC_MODEL,
+            max_tokens=600,
+            tools=[_INFER_TOOL],
+            tool_choice={"type": "tool", "name": "infer_spec"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in response.content:
+            if block.type == "tool_use":
+                raw = block.input
+                intent = IntentSignal(
+                    latent_goal=raw.get("latent_goal", goal[:30]),
+                    action_type=raw.get("action_type", "COORDINATE"),
+                    salient_entity_types=raw.get("salient_entity_types", []),
+                )
+                return LockedSpec(
+                    goal=goal,
+                    domain=domain,
+                    success_criteria=raw.get("success_criteria", goal),
+                    scope=raw.get("scope", ""),
+                    constraints=raw.get("constraints", []),
+                    output_format=raw.get("output_format", ""),
+                    inferred_assumptions=raw.get("inferred_assumptions", []),
+                    ambiguity_scores=scores,
+                    intent_signal=intent,
+                    clarification_asked=False,
+                    threshold_used=get_domain_threshold(domain),
+                )
+    except Exception:
+        pass
+
+    # Minimal safe fallback
+    return LockedSpec(
+        goal=goal,
+        domain=domain,
+        success_criteria=goal,
+        scope="",
+        constraints=[],
+        output_format="",
+        inferred_assumptions=["Spec inference failed — using raw goal as success criteria"],
+        ambiguity_scores=scores,
+        intent_signal=IntentSignal(
+            latent_goal=goal[:30],
+            action_type="COORDINATE",
+            salient_entity_types=[],
+        ),
+        clarification_asked=False,
+        threshold_used=get_domain_threshold(domain),
+    )
+
+
+# ---------------------------------------------------------------------------
+# lock_spec — public entry point (Facade)
+# ---------------------------------------------------------------------------
+
+def lock_spec(
+    goal: str,
+    domain: str = "general",
+    interactive: bool = False,
+) -> "tuple[LockedSpec, list[str]]":
+    """Ground a raw goal into a locked spec. Public API.
+
+    Pipeline:
+      1. Score goal on ATTRIBUTE, SCOPE, PREFERENCE axes independently
+      2. Read per-domain threshold from memory (learned, not hardcoded)
+      3. ClarificationPolicy decides: ask or infer
+      4a. If ask (interactive=True): generate targeted choice questions (max 2)
+          Return (spec_placeholder, questions) — caller surfaces questions to user
+          Caller must call lock_spec_with_answers(goal, domain, answers) next
+      4b. If infer (or interactive=False): infer spec from goal + ambiguity context
+          Return (locked_spec, []) with inferred_assumptions surfaced as one-liner
+
+    Args:
+        goal:        Raw goal string from user.
+        domain:      Domain key for threshold lookup and memory scoping.
+        interactive: If False, always infer — never ask. Use for programmatic callers.
+    Returns:
+        (LockedSpec, questions: list[str])
+        If questions is non-empty: spec is a placeholder, caller must handle questions.
+        If questions is empty: spec is fully locked, ready to pass to stream().
+    """
+    scores = _score_axes(goal, domain)
+    policy = ClarificationPolicy(domain)
+
+    if interactive and policy.should_ask(scores):
+        questions = _clarify(goal, scores)
+        if questions:
+            # Return placeholder spec + questions for caller to surface
+            placeholder = LockedSpec(
+                goal=goal,
+                domain=domain,
+                success_criteria="",
+                scope="",
+                constraints=[],
+                output_format="",
+                inferred_assumptions=[],
+                ambiguity_scores=scores,
+                intent_signal=IntentSignal(
+                    latent_goal=goal[:30],
+                    action_type="COORDINATE",
+                    salient_entity_types=[],
+                ),
+                clarification_asked=True,
+                threshold_used=policy.threshold,
+            )
+            return placeholder, questions
+
+    # Infer path: interactive=False, or policy said don't ask, or _clarify returned []
+    spec = _infer_spec(goal, domain, scores)
+    return spec, []
+
+
+def lock_spec_with_answers(
+    goal: str,
+    domain: str,
+    questions: list[str],
+    answers: list[str],
+) -> LockedSpec:
+    """Complete spec locking after user answered clarification questions.
+
+    Called after lock_spec() returned non-empty questions and the caller
+    surfaced them to the user and collected answers.
+
+    Args:
+        goal:      Original raw goal.
+        domain:    Domain key.
+        questions: Questions returned by lock_spec().
+        answers:   User's answers (same length as questions).
+    Returns:
+        Fully locked LockedSpec. Never raises.
+    """
+    from ballast.core.memory import get_domain_threshold
+
+    enriched_goal = goal
+    if questions and answers:
+        qa_context = "\n".join(
+            f"Q: {q}\nA: {a}" for q, a in zip(questions, answers)
+        )
+        enriched_goal = f"{goal}\n\nUser clarifications:\n{qa_context}"
+
+    scores = _score_axes(enriched_goal, domain)
+    spec = _infer_spec(enriched_goal, domain, scores)
+    spec.goal = goal  # preserve original goal for audit
+    spec.clarification_asked = True
+    return spec
