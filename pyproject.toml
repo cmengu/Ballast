@@ -25,3 +25,8 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["ballast"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires ANTHROPIC_API_KEY and live Anthropic API access — skip with -m 'not integration'",
+]
