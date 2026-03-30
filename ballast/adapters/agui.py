@@ -11,7 +11,7 @@ from typing import AsyncIterator
 
 from dotenv import load_dotenv
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 
 from ballast.core.stream import AgentStream
@@ -38,13 +38,13 @@ class AGUIAdapter(AgentStream):
       3. Which event type is the natural intervention point?
     """
 
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
-        api_key = os.environ.get("OPENAI_API_KEY")
+    def __init__(self, model: str = "claude-haiku-4-5-20251001") -> None:
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise EnvironmentError(
-                "OPENAI_API_KEY not set. Copy .env.example to .env and fill it in."
+                "ANTHROPIC_API_KEY not set. Copy .env.example to .env and fill it in."
             )
-        llm = ChatOpenAI(model=model, api_key=api_key)
+        llm = ChatAnthropic(model=model, api_key=api_key)
         self._graph = create_react_agent(llm, tools=[get_word_count])
 
     async def stream(self, goal: str, spec: dict) -> AsyncIterator[object]:
