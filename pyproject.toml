@@ -15,6 +15,7 @@ dependencies = [
     "anthropic>=0.20",
     "filelock",
     "pydantic>=2.0",
+    "pydantic-ai>=0.0.13,<1.0",
     "python-dotenv",
 ]
 
