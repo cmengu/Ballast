@@ -538,3 +538,87 @@ def memory_report(scope: str) -> str:
 
     lines.append(f"╚{border}╝")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Per-domain threshold calibration (used by spec.py ClarificationPolicy)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_THRESHOLD: float = 0.60
+_THRESHOLD_KEY_PREFIX: str = "clarification_threshold:"
+
+
+def get_domain_threshold(domain: str) -> float:
+    """Return the current clarification threshold for this domain.
+
+    Default: 0.60 (conservative — prefer asking over inferring).
+    Updated by update_domain_threshold() after each run.
+
+    The threshold is the maximum ambiguity axis score that the policy
+    will infer through without asking. Below threshold → infer.
+    At or above threshold → ask (up to 2 targeted questions).
+
+    Args:
+        domain: Domain key string (e.g. 'coding', 'data-analysis', 'writing').
+    Returns:
+        float in [0.0, 1.0]. Never raises.
+    """
+    path = _scope_path(f"{_THRESHOLD_KEY_PREFIX}{domain}")
+    if not path.exists():
+        return _DEFAULT_THRESHOLD
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return float(data.get("threshold", _DEFAULT_THRESHOLD))
+    except (json.JSONDecodeError, OSError, ValueError):
+        return _DEFAULT_THRESHOLD
+
+
+def update_domain_threshold(
+    domain: str,
+    clarification_asked: bool,
+    run_succeeded: bool,
+    max_ambiguity_score: float,
+) -> None:
+    """Calibrate the domain threshold from a completed run outcome.
+
+    Update rule (moving average toward calibrated value):
+      If clarification was NOT asked AND run succeeded:
+          threshold += 0.05 * (max_ambiguity_score - threshold)
+          → score was handled fine without asking; threshold can relax upward
+      If clarification was NOT asked AND run failed:
+          threshold -= 0.10 * threshold
+          → should have asked; threshold tightens downward
+      If clarification WAS asked AND run succeeded:
+          threshold is unchanged (asking worked — no signal to change)
+      If clarification WAS asked AND run failed:
+          threshold is unchanged (failure was downstream of spec, not spec itself)
+
+    Threshold clamped to [0.20, 0.90].
+    Never raises. Uses same file-lock as all other memory operations.
+
+    Args:
+        domain: Domain key string.
+        clarification_asked: Whether questions were surfaced before lock.
+        run_succeeded: Whether the run completed successfully.
+        max_ambiguity_score: The highest per-axis ambiguity score at lock time.
+    """
+    path = _scope_path(f"{_THRESHOLD_KEY_PREFIX}{domain}")
+    try:
+        with _scope_lock(path):
+            current = get_domain_threshold(domain)
+            if not clarification_asked and run_succeeded:
+                # Inferred spec worked — relax threshold upward
+                updated = current + 0.05 * (max_ambiguity_score - current)
+            elif not clarification_asked and not run_succeeded:
+                # Should have asked — tighten threshold downward
+                updated = current - 0.10 * current
+            else:
+                # Clarification was asked — no update signal
+                updated = current
+
+            updated = round(max(0.20, min(0.90, updated)), 4)
+
+            data = {"threshold": updated, "domain": domain}
+            atomic_write_json(path, data)
+    except Exception:
+        pass  # Never raise — threshold update is best-effort
