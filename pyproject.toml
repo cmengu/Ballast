@@ -11,6 +11,7 @@ dependencies = [
     "ag-ui-langgraph",
     "langgraph",
     "langchain-openai",
+    "langchain-anthropic",
     "anthropic>=0.20",
     "filelock",
     "pydantic>=2.0",
