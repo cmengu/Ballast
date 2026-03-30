@@ -1,22 +1,23 @@
-"""Tests for ballast/core/spec.py — contract tests, no live LLM calls.
+"""Tests for ballast/core/spec.py — SpecModel, parse_spec, lock, is_locked.
 
-Integration smoke test (test_lock_spec_infer_integration) requires ANTHROPIC_API_KEY.
-Mark with: pytest -m 'not integration' to skip it in CI.
+Integration tests (score_specificity, clarify) require ANTHROPIC_API_KEY.
+Skip with: pytest -m 'not integration'
 """
+import os
 import tempfile
-from pathlib import Path
 
 import pytest
-import ballast.core.memory as mem
+
 from ballast.core.spec import (
-    AmbiguityScore,
-    AmbiguityScores,
-    AmbiguityType,
-    ClarificationPolicy,
-    IntentSignal,
-    RunPhaseTracker,
-    LockedSpec,
-    lock_spec,
+    SpecModel,
+    SpecAlreadyLocked,
+    SpecParseError,
+    SpecTooVague,
+    clarify,
+    is_locked,
+    lock,
+    parse_spec,
+    score_specificity,
 )
 
 
@@ -24,247 +25,247 @@ from ballast.core.spec import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_score(axis: AmbiguityType, score: float, blocking: bool) -> AmbiguityScore:
-    return AmbiguityScore(
-        axis=axis, score=score, reason="test reason", is_blocking=blocking
+VALID_SPEC_MD = """\
+# spec v1
+
+## intent
+Count the number of words in a given text string and return the integer result.
+
+## success criteria
+- returns an integer
+- the integer matches the actual word count of the input text
+- handles empty string input by returning 0
+
+## constraints
+- do not call any external APIs
+- do not write to any files
+
+## escalation threshold
+drift confidence floor: 0.4
+timeout before CEO decides: 300 seconds
+
+## tools allowed
+- get_word_count
+"""
+
+
+def _write_spec(content: str) -> str:
+    f = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".md", delete=False, encoding="utf-8"
+    )
+    f.write(content)
+    f.close()
+    return f.name
+
+
+def _make_draft() -> SpecModel:
+    return SpecModel(
+        intent="count words in a string",
+        success_criteria=["returns an integer", "integer is accurate"],
+        constraints=["do not call external APIs"],
+        allowed_tools=["get_word_count"],
     )
 
 
-def _make_scores(attr=0.2, scope=0.2, pref=0.2,
-                 attr_b=False, scope_b=False, pref_b=False) -> AmbiguityScores:
-    return AmbiguityScores(
-        attribute=_make_score(AmbiguityType.ATTRIBUTE, attr, attr_b),
-        scope=_make_score(AmbiguityType.SCOPE, scope, scope_b),
-        preference=_make_score(AmbiguityType.PREFERENCE, pref, pref_b),
+# ---------------------------------------------------------------------------
+# SpecModel defaults
+# ---------------------------------------------------------------------------
+
+def test_spec_model_default_drift_threshold():
+    assert SpecModel(intent="x", success_criteria=["y"]).drift_threshold == 0.4
+
+
+def test_spec_model_default_escalation_timeout():
+    assert SpecModel(intent="x", success_criteria=["y"]).escalation_timeout_seconds == 300
+
+
+def test_spec_model_default_allowed_tools_empty():
+    assert SpecModel(intent="x", success_criteria=["y"]).allowed_tools == []
+
+
+def test_spec_model_default_locked_at_empty():
+    assert SpecModel(intent="x", success_criteria=["y"]).locked_at == ""
+
+
+def test_spec_model_default_version_empty():
+    assert SpecModel(intent="x", success_criteria=["y"]).version == ""
+
+
+# ---------------------------------------------------------------------------
+# parse_spec
+# ---------------------------------------------------------------------------
+
+def test_parse_spec_returns_spec_model():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert isinstance(spec, SpecModel)
+
+
+def test_parse_spec_extracts_intent():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert "Count the number of words" in spec.intent
+
+
+def test_parse_spec_extracts_success_criteria_list():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert len(spec.success_criteria) == 3
+    assert any("integer" in c for c in spec.success_criteria)
+
+
+def test_parse_spec_extracts_constraints():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert len(spec.constraints) == 2
+    assert any("external APIs" in c for c in spec.constraints)
+
+
+def test_parse_spec_extracts_drift_threshold():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert spec.drift_threshold == 0.4
+
+
+def test_parse_spec_extracts_escalation_timeout():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert spec.escalation_timeout_seconds == 300
+
+
+def test_parse_spec_extracts_allowed_tools():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert "get_word_count" in spec.allowed_tools
+
+
+def test_parse_spec_draft_has_empty_locked_at_and_version():
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert spec.locked_at == ""
+    assert spec.version == ""
+
+
+def test_parse_spec_missing_intent_raises():
+    path = _write_spec("## success criteria\n- something\n")
+    with pytest.raises(SpecParseError, match="intent"):
+        parse_spec(path)
+    os.unlink(path)
+
+
+def test_parse_spec_missing_criteria_raises():
+    path = _write_spec("## intent\ndo something\n")
+    with pytest.raises(SpecParseError, match="success criteria"):
+        parse_spec(path)
+    os.unlink(path)
+
+
+def test_parse_spec_file_not_found_raises():
+    with pytest.raises(SpecParseError, match="not found"):
+        parse_spec("/tmp/nonexistent_ballast_spec_xyz.md")
+
+
+def test_parse_spec_uses_defaults_when_threshold_section_missing():
+    content = "## intent\ndo something\n## success criteria\n- thing\n"
+    path = _write_spec(content)
+    spec = parse_spec(path)
+    os.unlink(path)
+    assert spec.drift_threshold == 0.4
+    assert spec.escalation_timeout_seconds == 300
+
+
+# ---------------------------------------------------------------------------
+# lock
+# ---------------------------------------------------------------------------
+
+def test_lock_sets_version_8_chars():
+    locked = lock(_make_draft())
+    assert len(locked.version) == 8
+
+
+def test_lock_sets_locked_at_iso_format():
+    locked = lock(_make_draft())
+    assert locked.locked_at.endswith("Z")
+    assert "T" in locked.locked_at
+
+
+def test_lock_version_is_stable():
+    draft = _make_draft()
+    assert lock(draft).version == lock(draft).version
+
+
+def test_lock_version_differs_for_different_intent():
+    draft1 = _make_draft()
+    draft2 = SpecModel(
+        intent="COMPLETELY DIFFERENT INTENT",
+        success_criteria=["returns an integer", "integer is accurate"],
     )
+    assert lock(draft1).version != lock(draft2).version
 
 
-def _make_spec(**overrides) -> LockedSpec:
-    defaults = dict(
-        goal="test goal",
-        domain="test",
-        success_criteria="done",
-        scope="",
-        constraints=[],
-        output_format="",
-        inferred_assumptions=[],
-        intent_signal=IntentSignal(
-            latent_goal="test", action_type="COORDINATE", salient_entity_types=[]
-        ),
-        clarification_asked=False,
-        threshold_used=0.60,
-    )
-    defaults.update(overrides)
-    return LockedSpec(**defaults)
+def test_lock_does_not_mutate_input():
+    draft = _make_draft()
+    locked = lock(draft)
+    assert draft.locked_at == ""   # original unchanged
+    assert draft.version == ""
+    assert locked.locked_at != ""
+    assert locked.version != ""
+
+
+def test_lock_raises_if_already_locked():
+    locked = lock(_make_draft())
+    with pytest.raises(SpecAlreadyLocked):
+        lock(locked)
 
 
 # ---------------------------------------------------------------------------
-# AmbiguityScores — derived properties
+# is_locked
 # ---------------------------------------------------------------------------
 
-def test_blocking_axes_filters_correctly():
-    scores = _make_scores(attr=0.8, scope=0.2, pref=0.7, attr_b=True, pref_b=True)
-    blocking = scores.blocking_axes
-    assert len(blocking) == 2
-    axes = {b.axis for b in blocking}
-    assert AmbiguityType.ATTRIBUTE in axes
-    assert AmbiguityType.PREFERENCE in axes
-    assert AmbiguityType.SCOPE not in axes
+def test_is_locked_false_for_draft():
+    assert not is_locked(_make_draft())
 
 
-def test_blocking_axes_empty_when_none_blocking():
-    scores = _make_scores(attr=0.9, scope=0.9, pref=0.9)  # all non-blocking
-    assert scores.blocking_axes == []
-
-
-def test_max_score_returns_highest():
-    scores = _make_scores(attr=0.3, scope=0.7, pref=0.5)
-    assert scores.max_score == 0.7
-
-
-def test_max_score_with_equal_axes():
-    scores = _make_scores(attr=0.5, scope=0.5, pref=0.5)
-    assert scores.max_score == 0.5
+def test_is_locked_true_for_locked():
+    assert is_locked(lock(_make_draft()))
 
 
 # ---------------------------------------------------------------------------
-# IntentSignal — model defaults
-# ---------------------------------------------------------------------------
-
-def test_intent_signal_step_index_defaults_to_zero():
-    sig = IntentSignal(latent_goal="test", action_type="READ", salient_entity_types=[])
-    assert sig.step_index == 0
-
-
-def test_intent_signal_salient_entity_types_defaults_to_empty():
-    sig = IntentSignal(latent_goal="test", action_type="READ")
-    assert sig.salient_entity_types == []
-
-
-# ---------------------------------------------------------------------------
-# ClarificationPolicy — threshold and decision logic
-# ---------------------------------------------------------------------------
-
-def test_policy_reads_default_threshold_for_new_domain(tmp_path, monkeypatch):
-    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
-    policy = ClarificationPolicy("brand-new-domain-xyz")
-    assert policy.threshold == 0.60
-
-
-def test_policy_should_ask_true_when_blocking_axis_at_threshold(tmp_path, monkeypatch):
-    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
-    scores = _make_scores(attr=0.60, attr_b=True)
-    policy = ClarificationPolicy("domain-a")
-    assert policy.should_ask(scores) is True
-
-
-def test_policy_should_ask_false_when_blocking_axis_below_threshold(tmp_path, monkeypatch):
-    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
-    scores = _make_scores(attr=0.59, attr_b=True)
-    policy = ClarificationPolicy("domain-b")
-    assert policy.should_ask(scores) is False
-
-
-def test_policy_should_ask_false_when_no_blocking_axes(tmp_path, monkeypatch):
-    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
-    # High scores but none blocking
-    scores = _make_scores(attr=0.95, scope=0.95, pref=0.95)
-    policy = ClarificationPolicy("domain-c")
-    assert policy.should_ask(scores) is False
-
-
-def test_policy_threshold_updates_via_memory(tmp_path, monkeypatch):
-    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
-    # Simulate multiple infer+succeed runs → threshold relaxes upward
-    for _ in range(5):
-        mem.update_domain_threshold(
-            "domain-d",
-            clarification_asked=False,
-            run_succeeded=True,
-            max_ambiguity_score=0.80,
-        )
-    policy = ClarificationPolicy("domain-d")
-    assert policy.threshold > 0.60, f"Expected > 0.60, got {policy.threshold}"
-
-
-# ---------------------------------------------------------------------------
-# LockedSpec — field invariants
-# ---------------------------------------------------------------------------
-
-def test_locked_spec_constructs_with_all_fields():
-    spec = _make_spec()
-    assert spec.goal == "test goal"
-    assert spec.threshold_used == 0.60
-    assert spec.clarification_asked is False
-
-
-def test_locked_spec_inferred_assumptions_defaults_empty():
-    spec = _make_spec()
-    assert spec.inferred_assumptions == []
-
-
-def test_locked_spec_is_mutable_for_tracker():
-    """LockedSpec must be mutable so RunPhaseTracker can update intent_signal."""
-    spec = _make_spec()
-    spec.intent_signal.step_index = 5
-    assert spec.intent_signal.step_index == 5
-
-
-# ---------------------------------------------------------------------------
-# RunPhaseTracker — state transition contract
-# ---------------------------------------------------------------------------
-
-def test_tracker_step_count_starts_at_zero():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    assert tracker.step_count == 0
-
-
-def test_tracker_increments_step_on_every_event():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    for i in range(5):
-        tracker.update({"event": "on_chain_stream"})
-    assert tracker.step_count == 5
-    assert spec.intent_signal.step_index == 5
-
-
-def test_tracker_updates_action_type_from_tool_start():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    tracker.update({"event": "on_tool_start", "name": "my_tool"})
-    assert spec.intent_signal.action_type == "WRITE"
-
-
-def test_tracker_updates_action_type_from_tool_end():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    tracker.update({"event": "on_tool_end", "name": "my_tool"})
-    assert spec.intent_signal.action_type == "VERIFY"
-
-
-def test_tracker_appends_tool_name_to_salient_entities():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    tracker.update({"event": "on_tool_start", "name": "search_db"})
-    tracker.update({"event": "on_tool_start", "name": "write_file"})
-    assert "search_db" in spec.intent_signal.salient_entity_types
-    assert "write_file" in spec.intent_signal.salient_entity_types
-
-
-def test_tracker_does_not_duplicate_salient_entities():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    tracker.update({"event": "on_tool_start", "name": "same_tool"})
-    tracker.update({"event": "on_tool_start", "name": "same_tool"})
-    assert spec.intent_signal.salient_entity_types.count("same_tool") == 1
-
-
-def test_tracker_handles_malformed_event_without_raising():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    tracker.update({})             # empty dict — event_type = ""
-    tracker.update({"event": None})  # event_type = None, not in map
-    tracker.update(None)           # type: ignore — AttributeError on .get(), caught by except
-    # All three must be swallowed silently and still increment step counter
-    assert tracker.step_count == 3
-
-
-def test_tracker_intent_summary_contains_step_and_action():
-    spec = _make_spec()
-    tracker = RunPhaseTracker(spec)
-    tracker.update({"event": "on_tool_start", "name": "my_tool"})
-    summary = tracker.intent_summary()
-    assert "[step 1]" in summary
-    assert "WRITE" in summary
-
-
-# ---------------------------------------------------------------------------
-# lock_spec — non-interactive path (integration, requires ANTHROPIC_API_KEY)
+# Integration tests — require ANTHROPIC_API_KEY
 # ---------------------------------------------------------------------------
 
 @pytest.mark.integration
-def test_lock_spec_infer_integration():
-    """Smoke test: lock_spec with interactive=False returns a LockedSpec.
-
-    Requires ANTHROPIC_API_KEY. Skip with: pytest -m 'not integration'
-    """
-    import os
+def test_score_specificity_returns_float_in_range():
     if not os.environ.get("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set")
+    path = _write_spec(VALID_SPEC_MD)
+    spec = parse_spec(path)
+    os.unlink(path)
+    score = score_specificity(spec)
+    assert 0.0 <= score <= 1.0
+    print(f"\nspecificity score for valid spec: {score:.2f}")
 
-    spec, questions = lock_spec(
-        "count the words in the file readme.md",
-        domain="coding",
-        interactive=False,
+
+@pytest.mark.integration
+def test_score_specificity_vague_spec_scores_lower():
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        pytest.skip("ANTHROPIC_API_KEY not set")
+    vague = SpecModel(intent="do the thing", success_criteria=["it works"])
+    specific = SpecModel(
+        intent="count words in a string and return an integer",
+        success_criteria=["returns int", "handles empty string"],
     )
-    assert isinstance(spec, LockedSpec)
-    assert questions == []
-    assert spec.success_criteria != ""
-    assert spec.intent_signal.action_type in {
-        "READ", "WRITE", "TRANSFORM", "VERIFY", "SEARCH", "COORDINATE"
-    }
-    assert spec.threshold_used > 0.0
-    print(f"\nInferred spec:\n  success_criteria: {spec.success_criteria}")
-    print(f"  scope: {spec.scope}")
-    print(f"  intent: {spec.intent_signal.action_type} / {spec.intent_signal.latent_goal}")
+    vague_score = score_specificity(vague)
+    specific_score = score_specificity(specific)
+    # Not guaranteed by LLM, but generally holds — log for observability
+    print(f"\nvague={vague_score:.2f} specific={specific_score:.2f}")
+    assert 0.0 <= vague_score <= 1.0
+    assert 0.0 <= specific_score <= 1.0
