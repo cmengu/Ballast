@@ -658,3 +658,113 @@ def lock_spec_with_answers(
     spec.goal = goal  # preserve original goal for audit
     spec.clarification_asked = True
     return spec
+
+
+# ---------------------------------------------------------------------------
+# RunPhaseTracker — within-run phase annotation
+# ---------------------------------------------------------------------------
+
+# Maps LangGraph event types to action_type verb classes.
+# This is a static heuristic lookup table — NOT STITCH.
+# STITCH trains a latent goal model; this approximates the same observable
+# outcome (intent-tagged events) using a rule-based classifier.
+# Upgrade path (Week 4): replace with embedding-based cluster assignment
+# trained on accumulated trajectory data.
+_EVENT_ACTION_MAP: dict[str, str] = {
+    "on_chat_model_start":  "COORDINATE",   # model thinking — coordinating next action
+    "on_chat_model_stream": "COORDINATE",
+    "on_chat_model_end":    "COORDINATE",
+    "on_tool_start":        "WRITE",         # tool execution — may have side effects
+    "on_tool_end":          "VERIFY",        # tool returned — verifying output
+    "on_chain_start":       "COORDINATE",
+    "on_chain_end":         "VERIFY",
+    "on_chain_stream":      "READ",
+}
+
+
+class RunPhaseTracker:
+    """Annotates a live event stream with run-phase labels.
+
+    Heuristic implementation: maps LangGraph event types to action_type
+    verb classes using a static lookup table. Increments step_index on
+    every event so downstream components can reason about run phase.
+
+    This is NOT STITCH. STITCH trains a latent goal model on trajectory
+    data. This approximates the same labelling outcome using rule-based
+    classification. The interface is designed to be drop-in replaceable
+    with a trained model in Week 4.
+
+    Usage (inside AGUIAdapter.stream):
+        tracker = RunPhaseTracker(spec)
+        async for event in self._graph.astream_events(...):
+            tracker.update(event)
+            yield event
+
+    The spec.intent_signal is mutated in place. After stream() completes,
+    intent_signal.step_index reflects the total number of events processed.
+    """
+
+    def __init__(self, spec: LockedSpec) -> None:
+        self.spec = spec
+        self._step = 0
+
+    def update(self, event: dict) -> None:
+        """Update the intent signal from a single LangGraph event.
+
+        Updates:
+          - step_index: incremented on every event
+          - action_type: mapped from event type via _EVENT_ACTION_MAP
+          - salient_entity_types: updated when tool events reveal entity context
+
+        Never raises — intent update is best-effort.
+        """
+        try:
+            self._step += 1
+            self.spec.intent_signal.step_index = self._step
+
+            event_type = event.get("event", "")
+            if event_type in _EVENT_ACTION_MAP:
+                self.spec.intent_signal.action_type = _EVENT_ACTION_MAP[event_type]
+
+            # Extract salient entity types from tool events.
+            # Tool name reveals the entity type the agent is operating on.
+            if event_type == "on_tool_start":
+                tool_name = event.get("name", "")
+                if tool_name and tool_name not in self.spec.intent_signal.salient_entity_types:
+                    self.spec.intent_signal.salient_entity_types.append(tool_name)
+
+            # If a chain ends with messages in state, update latent_goal hint.
+            # This captures mid-run topic pivots visible in the message state.
+            if event_type == "on_chain_end":
+                data = event.get("data", {})
+                output = data.get("output", {})
+                if isinstance(output, dict):
+                    messages = output.get("messages", [])
+                    if messages:
+                        last_msg = messages[-1]
+                        content = ""
+                        if isinstance(last_msg, dict):
+                            content = str(last_msg.get("content", ""))
+                        elif hasattr(last_msg, "content"):
+                            content = str(last_msg.content)
+                        if content and len(content) > 10:
+                            # Use first 40 chars of latest output as latent goal hint
+                            self.spec.intent_signal.latent_goal = content[:40].strip()
+        except Exception:
+            pass  # Never raise — tracker failure must not break the event stream
+
+    @property
+    def step_count(self) -> int:
+        """Total events processed so far."""
+        return self._step
+
+    def intent_summary(self) -> str:
+        """One-line summary of current intent state. For logging."""
+        sig = self.spec.intent_signal
+        entities = ", ".join(sig.salient_entity_types[:3]) or "none"
+        return (
+            f"[step {sig.step_index}] "
+            f"{sig.action_type} | "
+            f"goal={sig.latent_goal[:30]!r} | "
+            f"entities=[{entities}]"
+        )
