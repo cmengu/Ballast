@@ -38,6 +38,48 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
+# SpecDelta — diff between two locked SpecModel versions
+# ---------------------------------------------------------------------------
+
+class SpecDelta(BaseModel):
+    """Diff between two locked SpecModel versions.
+
+    Produced by SpecModel.diff(other).
+    Consumed by hook.py to inject spec changes between Agent.iter nodes.
+    """
+    from_version: str
+    to_version: str
+    added_constraints: List[str] = Field(default_factory=list)
+    removed_constraints: List[str] = Field(default_factory=list)
+    added_tools: List[str] = Field(default_factory=list)
+    removed_tools: List[str] = Field(default_factory=list)
+    intent_changed: bool = False
+
+    def as_injection(self) -> str:
+        """Return a plain-text string the agent reads as mid-run context."""
+        lines = [f"[SPEC UPDATE {self.from_version} → {self.to_version}]"]
+        if self.added_constraints:
+            lines.append(
+                f"NEW CONSTRAINTS (apply immediately): "
+                f"{'; '.join(self.added_constraints)}"
+            )
+        if self.removed_constraints:
+            lines.append(
+                f"LIFTED CONSTRAINTS: {'; '.join(self.removed_constraints)}"
+            )
+        if self.removed_tools:
+            lines.append(
+                f"TOOLS REMOVED (do not use): {', '.join(self.removed_tools)}"
+            )
+        if self.added_tools:
+            lines.append(f"TOOLS ADDED: {', '.join(self.added_tools)}")
+        if self.intent_changed:
+            lines.append("INTENT CHANGED — re-read spec before next action.")
+        lines.append("[Continue from current node under updated spec.]")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Data contract
 # ---------------------------------------------------------------------------
 
