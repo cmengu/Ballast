@@ -1,159 +1,314 @@
-"""Tests for ballast/core/trajectory.py — contract tests, no LLM calls."""
-import tempfile
-from pathlib import Path
+"""Tests for ballast/core/trajectory.py — mid-run drift detection.
 
-import ballast.core.memory as mem
-from ballast.core.spec import IntentSignal, LockedSpec
+Unit tests mock score_intent_alignment and score_constraint_violation.
+score_tool_compliance is tested directly (pure Python, no LLM).
+Integration test requires ANTHROPIC_API_KEY. Skip with: pytest -m 'not integration'
+"""
+import os
+from unittest.mock import patch
+
+import pytest
+
+from ballast.core.spec import SpecModel, lock
 from ballast.core.trajectory import (
-    TrajectoryReport,
-    _extract_keywords,
-    _keywords_present,
-    validate_trajectory,
+    DriftDetected,
+    DriftResult,
+    TrajectoryChecker,
+    _extract_node_info,
+    score_tool_compliance,
 )
 
 
-def _make_spec(success_criteria: str = "the word count was returned", domain: str = "test") -> LockedSpec:
-    return LockedSpec(
-        goal="count words",
-        domain=domain,
-        success_criteria=success_criteria,
-        scope="",
-        constraints=[],
-        output_format="",
-        inferred_assumptions=[],
-        intent_signal=IntentSignal(
-            latent_goal="word count", action_type="READ", salient_entity_types=[]
-        ),
-        clarification_asked=False,
-        threshold_used=0.60,
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_spec(
+    allowed_tools: list = None,
+    constraints: list = None,
+    drift_threshold: float = 0.7,
+) -> SpecModel:
+    return lock(SpecModel(
+        intent="count words in a string",
+        success_criteria=["returns an integer", "integer is accurate"],
+        constraints=constraints or [],
+        allowed_tools=allowed_tools or [],
+        drift_threshold=drift_threshold,
+    ))
+
+
+class FakeToolNode:
+    """Simulates a pydantic-ai node with tool_name and args attributes."""
+    def __init__(self, tool_name: str, args: dict = None):
+        self.tool_name = tool_name
+        self.args = args or {}
+
+
+class FakeTextNode:
+    """Simulates a pydantic-ai node with a text attribute."""
+    def __init__(self, text: str):
+        self.text = text
+
+
+class FakeEmptyNode:
+    """Node with no scoreable attributes."""
+    pass
+
+
+# ---------------------------------------------------------------------------
+# _extract_node_info
+# ---------------------------------------------------------------------------
+
+def test_extract_tool_node_detects_tool_name():
+    node = FakeToolNode("get_word_count", {"text": "hello"})
+    node_type, content, tool_info = _extract_node_info(node)
+    assert tool_info["tool_name"] == "get_word_count"
+    assert tool_info["tool_args"] == {"text": "hello"}
+
+
+def test_extract_text_node_captures_content():
+    node = FakeTextNode("The word count is 4.")
+    node_type, content, tool_info = _extract_node_info(node)
+    assert "word count" in content
+    assert tool_info == {}
+
+
+def test_extract_empty_node_returns_empty():
+    node_type, content, tool_info = _extract_node_info(FakeEmptyNode())
+    assert content == ""
+    assert tool_info == {}
+
+
+def test_extract_node_type_name_is_class_name():
+    node = FakeToolNode("any")
+    node_type, _, _ = _extract_node_info(node)
+    assert node_type == "FakeToolNode"
+
+
+# ---------------------------------------------------------------------------
+# score_tool_compliance (rule-based, no LLM)
+# ---------------------------------------------------------------------------
+
+def test_tool_compliance_empty_allowed_all_permitted():
+    spec = _make_spec(allowed_tools=[])
+    assert score_tool_compliance(FakeToolNode("any_tool"), spec) == 1.0
+
+
+def test_tool_compliance_tool_in_list():
+    spec = _make_spec(allowed_tools=["get_word_count"])
+    assert score_tool_compliance(FakeToolNode("get_word_count"), spec) == 1.0
+
+
+def test_tool_compliance_tool_not_in_list():
+    spec = _make_spec(allowed_tools=["get_word_count"])
+    assert score_tool_compliance(FakeToolNode("forbidden"), spec) == 0.0
+
+
+def test_tool_compliance_non_tool_node_always_passes():
+    spec = _make_spec(allowed_tools=["get_word_count"])
+    assert score_tool_compliance(FakeTextNode("some output"), spec) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryChecker — init guards
+# ---------------------------------------------------------------------------
+
+def test_checker_requires_locked_spec():
+    draft = SpecModel(intent="x", success_criteria=["y"])
+    with pytest.raises(ValueError, match="locked"):
+        TrajectoryChecker(draft)
+
+
+def test_checker_accepts_locked_spec():
+    checker = TrajectoryChecker(_make_spec())
+    assert checker.step_count == 0
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryChecker — non-scoreable events
+# ---------------------------------------------------------------------------
+
+def test_checker_empty_node_returns_none():
+    checker = TrajectoryChecker(_make_spec())
+    result = checker.check(FakeEmptyNode())
+    assert result is None
+    assert checker.step_count == 0
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryChecker — passing checks
+# ---------------------------------------------------------------------------
+
+def test_checker_passing_tool_check_returns_drift_result():
+    spec = _make_spec(allowed_tools=["get_word_count"])
+    checker = TrajectoryChecker(spec)
+    node = FakeToolNode("get_word_count", {"text": "hello"})
+    with patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9), \
+         patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+        result = checker.check(node)
+    assert isinstance(result, DriftResult)
+    assert result.tool_score == 1.0
+    assert result.failing_dimension == "none"
+    assert checker.step_count == 1
+
+
+def test_checker_step_count_increments_per_scored_node():
+    checker = TrajectoryChecker(_make_spec())
+    with patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9), \
+         patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+        checker.check(FakeToolNode("t1"))
+        checker.check(FakeTextNode("output"))
+    assert checker.step_count == 2
+
+
+def test_checker_non_scoreable_does_not_increment_step():
+    checker = TrajectoryChecker(_make_spec())
+    checker.check(FakeEmptyNode())
+    assert checker.step_count == 0
+
+
+# ---------------------------------------------------------------------------
+# TrajectoryChecker — drift detected
+# ---------------------------------------------------------------------------
+
+def test_checker_forbidden_tool_raises_drift_detected():
+    spec = _make_spec(allowed_tools=["get_word_count"])
+    checker = TrajectoryChecker(spec)
+    with pytest.raises(DriftDetected) as exc_info:
+        with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+             patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+            checker.check(FakeToolNode("forbidden_tool"))
+    result = exc_info.value.result
+    assert result.tool_score == 0.0
+    assert result.failing_dimension == "tool"
+    assert result.score == 0.0
+
+
+def test_checker_constraint_violation_raises_drift():
+    spec = _make_spec(constraints=["do not write files"])
+    checker = TrajectoryChecker(spec)
+    with pytest.raises(DriftDetected) as exc_info:
+        with patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9), \
+             patch("ballast.core.trajectory.score_constraint_violation", return_value=0.0):
+            checker.check(FakeTextNode("I modified the file"))
+    assert exc_info.value.result.constraint_score == 0.0
+    assert exc_info.value.result.failing_dimension == "constraint"
+
+
+def test_checker_intent_misalignment_raises_drift():
+    checker = TrajectoryChecker(_make_spec())
+    with pytest.raises(DriftDetected) as exc_info:
+        with patch("ballast.core.trajectory.score_intent_alignment", return_value=0.2), \
+             patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+            checker.check(FakeTextNode("completely unrelated output"))
+    assert exc_info.value.result.intent_score == 0.2
+    assert exc_info.value.result.failing_dimension == "intent"
+    assert exc_info.value.result.score == 0.2
+
+
+# ---------------------------------------------------------------------------
+# failing_dimension priority
+# ---------------------------------------------------------------------------
+
+def test_failing_dimension_tool_beats_constraint_when_both_zero():
+    spec = _make_spec(allowed_tools=["safe"], constraints=["do not do x"])
+    checker = TrajectoryChecker(spec)
+    with pytest.raises(DriftDetected) as exc_info:
+        with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+             patch("ballast.core.trajectory.score_constraint_violation", return_value=0.0):
+            checker.check(FakeToolNode("forbidden"))
+    result = exc_info.value.result
+    # tool=0.0, constraint=0.0, intent=1.0 → tool priority
+    assert result.failing_dimension == "tool"
+
+
+def test_failing_dimension_constraint_beats_intent_when_equal():
+    # Regression: constraint_score == intent_score == aggregate; constraint has priority
+    spec = _make_spec(constraints=["do not write files"])
+    checker = TrajectoryChecker(spec)
+    with pytest.raises(DriftDetected) as exc_info:
+        with patch("ballast.core.trajectory.score_intent_alignment", return_value=0.5), \
+             patch("ballast.core.trajectory.score_constraint_violation", return_value=0.5):
+            checker.check(FakeTextNode("I modified a file"))
+    assert exc_info.value.result.failing_dimension == "constraint"
+
+
+def test_failing_dimension_none_when_all_pass():
+    checker = TrajectoryChecker(_make_spec())
+    with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+         patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+        result = checker.check(FakeTextNode("word count returned"))
+    assert result.failing_dimension == "none"
+    assert result.score == 1.0
+
+
+# ---------------------------------------------------------------------------
+# DriftResult fields
+# ---------------------------------------------------------------------------
+
+def test_drift_result_spec_version_matches_spec():
+    spec = _make_spec()
+    checker = TrajectoryChecker(spec)
+    with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+         patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+        result = checker.check(FakeToolNode("t"))
+    assert result.spec_version == spec.version
+
+
+def test_drift_result_threshold_matches_spec_drift_threshold():
+    spec = _make_spec(drift_threshold=0.6)
+    checker = TrajectoryChecker(spec)
+    with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+         patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+        result = checker.check(FakeToolNode("t"))
+    assert result.threshold == 0.6
+
+
+def test_drift_result_raised_at_step_increments():
+    checker = TrajectoryChecker(_make_spec(drift_threshold=0.0))  # threshold=0 → never raises
+    with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+         patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+        r1 = checker.check(FakeTextNode("step 1"))
+        r2 = checker.check(FakeTextNode("step 2"))
+    assert r1.raised_at_step == 1
+    assert r2.raised_at_step == 2
+
+
+def test_drift_detected_message_contains_step_and_failing():
+    spec = _make_spec(allowed_tools=["safe"])
+    checker = TrajectoryChecker(spec)
+    try:
+        with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+             patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
+            checker.check(FakeToolNode("forbidden"))
+    except DriftDetected as e:
+        assert "step 1" in str(e)
+        assert "tool" in str(e)
+
+
+# ---------------------------------------------------------------------------
+# Integration test — requires ANTHROPIC_API_KEY
+# ---------------------------------------------------------------------------
+
+@pytest.mark.integration
+def test_trajectory_checker_real_llm():
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        pytest.skip("ANTHROPIC_API_KEY not set")
+
+    spec = _make_spec(
+        allowed_tools=["get_word_count"],
+        constraints=["do not modify any files"],
+        drift_threshold=0.4,
     )
-
-
-def _make_events(content: str) -> list[dict]:
-    """Minimal on_chain_end event with message content."""
-    return [
-        {"event": "on_chain_start", "data": {}},
-        {
-            "event": "on_chain_end",
-            "data": {"output": {"messages": [{"content": content}]}},
-        },
-    ]
-
-
-# ---------------------------------------------------------------------------
-# _extract_keywords
-# ---------------------------------------------------------------------------
-
-def test_extract_keywords_removes_stop_words():
-    kws = _extract_keywords("the word count was returned")
-    assert "the" not in kws
-    assert "was" not in kws
-    assert "word" in kws
-    assert "count" in kws
-    assert "returned" in kws
-
-
-def test_extract_keywords_empty_string_returns_empty():
-    assert _extract_keywords("") == []
-
-
-def test_extract_keywords_short_words_excluded():
-    kws = _extract_keywords("do it now")
-    assert "it" not in kws  # len 2, excluded
-
-
-# ---------------------------------------------------------------------------
-# _keywords_present
-# ---------------------------------------------------------------------------
-
-def test_keywords_present_true_when_majority_match():
-    assert _keywords_present(["word", "count", "returned"], "the word count was returned") is True
-
-
-def test_keywords_present_false_when_none_match():
-    assert _keywords_present(["database", "schema", "migration"], "the word count was 4") is False
-
-
-def test_keywords_present_empty_keywords_returns_false():
-    assert _keywords_present([], "anything") is False
-
-
-# ---------------------------------------------------------------------------
-# validate_trajectory
-# ---------------------------------------------------------------------------
-
-def test_validate_passes_when_criteria_keywords_in_output():
-    spec = _make_spec("the word count was returned")
-    events = _make_events("The word count is 4.")
-    report = validate_trajectory(spec, events, update_calibration=False)
-    assert isinstance(report, TrajectoryReport)
-    assert report.passed is True
-    assert report.event_count == 2
-
-
-def test_validate_fails_when_criteria_keywords_not_in_output():
-    spec = _make_spec("the word count was returned")
-    events = _make_events("An error occurred during processing.")
-    report = validate_trajectory(spec, events, update_calibration=False)
-    assert report.passed is False
-
-
-def test_validate_passes_when_no_keywords_extractable():
-    spec = _make_spec("do it")  # all stop words / short words
-    events = _make_events("Some output here.")
-    report = validate_trajectory(spec, events, update_calibration=False)
-    assert report.passed is True
-    assert any("no extractable keywords" in n for n in report.notes)
-
-
-def test_validate_empty_events_fails():
-    spec = _make_spec("word count returned")
-    report = validate_trajectory(spec, [], update_calibration=False)
-    assert report.passed is False
-    assert report.event_count == 0
-
-
-def test_validate_wires_calibration(tmp_path, monkeypatch):
-    """validate_trajectory with update_calibration=True calls update_domain_threshold."""
-    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
-    spec = _make_spec(success_criteria="word count returned", domain="test-calibration")
-    events = _make_events("The word count was returned: 4 words.")
-    report = validate_trajectory(spec, events, update_calibration=True)
-    assert report.passed is True
-    # Confirm calibration ran: threshold must differ from the 0.60 default.
-    # _make_spec() sets ambiguity_scores=None → max_score=0.0 →
-    # update rule: 0.60 + 0.05*(0.0-0.60) = 0.57 (tightens slightly).
-    # We don't assert direction here — just that calibration fired and clamping holds.
-    threshold = mem.get_domain_threshold("test-calibration")
-    assert threshold != 0.60, "Threshold unchanged — update_domain_threshold was not called"
-    assert 0.20 <= threshold <= 0.90, f"Threshold {threshold} outside clamped bounds"
-
-
-def test_validate_report_contains_matched_fragment():
-    spec = _make_spec("word count returned")
-    events = _make_events("The word count was returned: 4 words.")
-    report = validate_trajectory(spec, events, update_calibration=False)
-    assert report.passed is True
-    assert "word" in report.matched_in.lower() or len(report.matched_in) > 0
-
-
-def test_validate_handles_langchain_message_objects():
-    """_extract_content must handle LangChain AIMessage objects (not just dicts).
-
-    Real LangGraph output from create_react_agent uses AIMessage objects.
-    The dict path (isinstance(last, dict)) is the test-only path.
-    The hasattr(last, "content") path is the production path.
-    """
-    class FakeAIMessage:
-        def __init__(self, content: str):
-            self.content = content
-
-    spec = _make_spec("word count returned")
-    events = [{
-        "event": "on_chain_end",
-        "data": {"output": {"messages": [FakeAIMessage("The word count was returned: 4.")]}},
-    }]
-    report = validate_trajectory(spec, events, update_calibration=False)
-    assert report.passed is True, (
-        "FakeAIMessage.content not extracted — hasattr(last, 'content') path is broken"
+    checker = TrajectoryChecker(spec)
+    node = FakeToolNode("get_word_count", {"text": "the quick brown fox"})
+    result = checker.check(node)
+    assert isinstance(result, DriftResult)
+    assert result.tool_score == 1.0
+    print(
+        f"\nIntegration: score={result.score:.2f} "
+        f"intent={result.intent_score:.2f} "
+        f"tool={result.tool_score:.2f} "
+        f"constraint={result.constraint_score:.2f} "
+        f"failing={result.failing_dimension}"
     )
