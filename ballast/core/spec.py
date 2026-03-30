@@ -317,3 +317,128 @@ def _score_axes(goal: str, domain: str) -> AmbiguityScores:
         scope=_conservative.model_copy(update={"axis": AmbiguityType.SCOPE}),
         preference=_conservative.model_copy(update={"axis": AmbiguityType.PREFERENCE}),
     )
+
+
+# ---------------------------------------------------------------------------
+# Clarification policy — the learned ask/infer decision
+# ---------------------------------------------------------------------------
+
+class ClarificationPolicy:
+    """Encapsulates the per-domain ask-vs-infer decision.
+
+    Reads the current domain threshold from memory at construction time.
+    Decision: if any blocking axis score >= threshold → ask.
+
+    The threshold is not hardcoded. It drifts over time via
+    memory.update_domain_threshold() called at the end of each run.
+    This approximates the RL policy the frontier literature describes:
+    'when to ask' is a learned, domain-calibrated function, not a constant.
+
+    Usage:
+        policy = ClarificationPolicy(domain='coding')
+        if policy.should_ask(scores):
+            questions = _clarify(goal, scores)
+    """
+
+    def __init__(self, domain: str) -> None:
+        from ballast.core.memory import get_domain_threshold
+        self.domain = domain
+        self.threshold: float = get_domain_threshold(domain)
+
+    def should_ask(self, scores: AmbiguityScores) -> bool:
+        """Return True if clarification questions should be surfaced.
+
+        Decision: at least one blocking axis has score >= self.threshold.
+        Non-blocking axes never trigger asking regardless of score.
+        """
+        return any(
+            axis.score >= self.threshold
+            for axis in scores.blocking_axes
+        )
+
+
+# ---------------------------------------------------------------------------
+# Question generation — structured choices, not open text
+# ---------------------------------------------------------------------------
+
+_QUESTION_TYPE_PROMPTS: dict[AmbiguityType, str] = {
+    AmbiguityType.ATTRIBUTE: (
+        "Generate a clarification question about WHICH specific item, version, "
+        "or variant is wanted. The question must offer 2-3 concrete choices. "
+        "Reason for asking: {reason}"
+    ),
+    AmbiguityType.SCOPE: (
+        "Generate a clarification question about the BOUNDARY of what should be "
+        "touched (files, services, environment). Offer 2-3 concrete scope options. "
+        "Reason for asking: {reason}"
+    ),
+    AmbiguityType.PREFERENCE: (
+        "Generate a clarification question about the TRADE-OFF preferred "
+        "(speed vs thoroughness, brevity vs detail, etc). Offer 2-3 named options. "
+        "Reason for asking: {reason}"
+    ),
+}
+
+_CLARIFY_SYSTEM_PROMPT = """You are generating targeted clarification questions for an AI agent.
+Rules:
+- Generate EXACTLY ONE question per axis provided.
+- Each question must be a single sentence ending with '?'
+- Each question must offer 2-3 concrete choices in square brackets like: [option A / option B]
+- Do NOT ask about axes not provided.
+- Keep questions to 25 words max.
+- Return ONLY a JSON array of question strings. No preamble. No markdown.
+Example: ["Which file should be updated? [parser.py / tokenizer.py / all affected files]",
+           "Should the output be brief or comprehensive? [brief summary / full analysis]"]
+"""
+
+
+def _clarify(goal: str, scores: AmbiguityScores) -> list[str]:
+    """Generate targeted clarification questions for blocking axes.
+
+    Returns at most 2 questions (the 2 highest-scoring blocking axes).
+    Questions are structured as choices, not open text.
+    Returns [] on any error — caller falls through to _infer_spec.
+
+    Args:
+        goal:   Raw goal string (for question context).
+        scores: Ambiguity scores — only blocking axes generate questions.
+    Returns:
+        list of question strings (0-2 items).
+    """
+    blocking = sorted(
+        scores.blocking_axes,
+        key=lambda a: a.score,
+        reverse=True,
+    )[:2]  # Cap at 2 questions maximum
+
+    if not blocking:
+        return []
+
+    axis_instructions = "\n".join(
+        f"Axis {i+1} ({ax.axis.value}): "
+        + _QUESTION_TYPE_PROMPTS[ax.axis].format(reason=ax.reason)
+        for i, ax in enumerate(blocking)
+    )
+
+    user_prompt = (
+        f"Goal: {goal}\n\n"
+        f"Generate clarification questions for these axes:\n{axis_instructions}"
+    )
+
+    try:
+        response = _get_spec_client().messages.create(
+            model=_SPEC_MODEL,
+            max_tokens=300,
+            system=_CLARIFY_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        text = "".join(
+            block.text for block in response.content
+            if hasattr(block, "text")
+        ).strip()
+        questions = _json.loads(text)
+        if isinstance(questions, list):
+            return [q for q in questions if isinstance(q, str)][:2]
+    except Exception:
+        pass
+    return []
