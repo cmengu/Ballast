@@ -122,6 +122,26 @@ class SpecModel(BaseModel):
         default="",
         description="ISO-8601 UTC timestamp set by lock(). Empty = draft.",
     )
+    parent_hash: str = Field(
+        default="",
+        description="version of the spec this was derived from. Empty = root spec.",
+    )
+
+    def diff(self, other: "SpecModel") -> "SpecDelta":
+        """Return a SpecDelta describing what changed from self to other.
+
+        Caller: hook.py — active_spec.diff(new_spec) at every node boundary.
+        Both specs should be locked before calling diff().
+        """
+        return SpecDelta(
+            from_version=self.version,
+            to_version=other.version,
+            added_constraints=[c for c in other.constraints if c not in self.constraints],
+            removed_constraints=[c for c in self.constraints if c not in other.constraints],
+            added_tools=[t for t in other.allowed_tools if t not in self.allowed_tools],
+            removed_tools=[t for t in self.allowed_tools if t not in other.allowed_tools],
+            intent_changed=self.intent != other.intent,
+        )
 
 
 # ---------------------------------------------------------------------------
