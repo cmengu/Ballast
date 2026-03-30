@@ -269,3 +269,114 @@ def test_score_specificity_vague_spec_scores_lower():
     print(f"\nvague={vague_score:.2f} specific={specific_score:.2f}")
     assert 0.0 <= vague_score <= 1.0
     assert 0.0 <= specific_score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# SpecDelta + diff() + parent_hash tests (8 tests, no LLM calls)
+# ---------------------------------------------------------------------------
+
+def _make_v1() -> SpecModel:
+    return lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+    ))
+
+
+def test_spec_delta_from_and_to_version():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+        constraints=["do not mention OpenAI"],
+    ))
+    delta = v1.diff(v2)
+    assert delta.from_version == v1.version
+    assert delta.to_version == v2.version
+
+
+def test_diff_detects_added_constraint():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+        constraints=["do not mention OpenAI"],
+    ))
+    delta = v1.diff(v2)
+    assert delta.added_constraints == ["do not mention OpenAI"]
+    assert delta.removed_constraints == []
+
+
+def test_diff_detects_removed_tool():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search"],  # write_file removed
+    ))
+    delta = v1.diff(v2)
+    assert delta.removed_tools == ["write_file"]
+    assert delta.added_tools == []
+
+
+def test_diff_detects_intent_changed():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a summary of AI companies",  # changed
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+    ))
+    delta = v1.diff(v2)
+    assert delta.intent_changed is True
+
+
+def test_diff_no_changes_produces_empty_delta():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+    ))
+    delta = v1.diff(v2)
+    assert delta.added_constraints == []
+    assert delta.removed_constraints == []
+    assert delta.added_tools == []
+    assert delta.removed_tools == []
+    assert delta.intent_changed is False
+
+
+def test_as_injection_contains_spec_update_header():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+        constraints=["do not mention OpenAI"],
+    ))
+    delta = v1.diff(v2)
+    injection = delta.as_injection()
+    assert f"[SPEC UPDATE {v1.version} → {v2.version}]" in injection
+    assert "do not mention OpenAI" in injection
+    assert "[Continue from current node under updated spec.]" in injection
+
+
+def test_parent_hash_field_defaults_empty():
+    spec = SpecModel(
+        intent="do something",
+        success_criteria=["it is done"],
+    )
+    assert spec.parent_hash == ""
+
+
+def test_parent_hash_travels_through_lock():
+    v1 = _make_v1()
+    draft_v2 = SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+        parent_hash=v1.version,
+    )
+    v2 = lock(draft_v2)
+    assert v2.parent_hash == v1.version
