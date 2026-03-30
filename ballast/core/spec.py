@@ -171,3 +171,149 @@ class LockedSpec(BaseModel):
     )
 
     model_config = {"frozen": False}  # RunPhaseTracker mutates intent_signal.step_index
+
+
+# ---------------------------------------------------------------------------
+# Anthropic client (lazy singleton — matches memory.py pattern)
+# ---------------------------------------------------------------------------
+
+import anthropic as _anthropic
+import json as _json
+
+_spec_client: "_anthropic.Anthropic | None" = None
+_SPEC_MODEL: str = "claude-sonnet-4-6"
+
+
+def _get_spec_client() -> "_anthropic.Anthropic":
+    global _spec_client
+    if _spec_client is None:
+        _spec_client = _anthropic.Anthropic()
+    return _spec_client
+
+
+# ---------------------------------------------------------------------------
+# Per-axis ambiguity scoring
+# ---------------------------------------------------------------------------
+
+_SCORING_PROMPT = """You are an intent grounding system for an AI agent orchestrator.
+
+Analyse the following goal string across THREE independent ambiguity axes.
+For each axis, produce a score from 0.0 (fully specified) to 1.0 (completely ambiguous)
+and a one-sentence reason.
+
+ATTRIBUTE ambiguity: Is it unclear which version, format, variant, or specific item is wanted?
+Example high score: "fix the bug" — which bug? which file?
+Example low score: "fix the off-by-one error in src/parser.py line 42"
+
+SCOPE ambiguity: Is it unclear which files, services, environments, or resources are in play?
+Example high score: "update the tests" — which tests? which test runner? which environment?
+Example low score: "update tests/test_parser.py to cover the edge case added in PR #12"
+
+PREFERENCE ambiguity: Is it unclear whether speed vs thoroughness, brevity vs completeness,
+or safety vs risk is preferred?
+Example high score: "summarise the document" — short or comprehensive? lose nuance or preserve it?
+Example low score: "produce a 3-bullet executive summary of the document, prioritising action items"
+
+Also decide: is each axis BLOCKING (score >= 0.55 suggests blocking, but use judgment)?
+An axis is blocking if a wrong assumption would cause the agent to do the wrong thing.
+
+Domain context: {domain}
+Goal: {goal}"""
+
+
+def _score_axes(goal: str, domain: str) -> AmbiguityScores:
+    """Score a goal across ATTRIBUTE, SCOPE, PREFERENCE axes independently.
+
+    Uses Claude with structured tool output to produce per-axis scores.
+    Returns conservative all-blocking scores on any error (fail-safe: prefer asking).
+
+    Args:
+        goal:   Raw goal string from the user.
+        domain: Domain key for context (included in prompt to calibrate scoring to domain norms).
+    Returns:
+        AmbiguityScores with three independent axis assessments.
+    """
+    prompt = _SCORING_PROMPT.format(goal=goal, domain=domain)
+    try:
+        response = _get_spec_client().messages.create(
+            model=_SPEC_MODEL,
+            max_tokens=400,
+            tools=[{
+                "name": "score_ambiguity",
+                "description": "Return per-axis ambiguity scores.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "attribute": {
+                            "type": "object",
+                            "properties": {
+                                "score": {"type": "number"},
+                                "reason": {"type": "string"},
+                                "is_blocking": {"type": "boolean"},
+                            },
+                            "required": ["score", "reason", "is_blocking"],
+                        },
+                        "scope": {
+                            "type": "object",
+                            "properties": {
+                                "score": {"type": "number"},
+                                "reason": {"type": "string"},
+                                "is_blocking": {"type": "boolean"},
+                            },
+                            "required": ["score", "reason", "is_blocking"],
+                        },
+                        "preference": {
+                            "type": "object",
+                            "properties": {
+                                "score": {"type": "number"},
+                                "reason": {"type": "string"},
+                                "is_blocking": {"type": "boolean"},
+                            },
+                            "required": ["score", "reason", "is_blocking"],
+                        },
+                    },
+                    "required": ["attribute", "scope", "preference"],
+                },
+            }],
+            tool_choice={"type": "tool", "name": "score_ambiguity"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        for block in response.content:
+            if block.type == "tool_use":
+                raw = block.input
+                return AmbiguityScores(
+                    attribute=AmbiguityScore(
+                        axis=AmbiguityType.ATTRIBUTE,
+                        score=float(raw["attribute"]["score"]),
+                        reason=raw["attribute"]["reason"],
+                        is_blocking=bool(raw["attribute"]["is_blocking"]),
+                    ),
+                    scope=AmbiguityScore(
+                        axis=AmbiguityType.SCOPE,
+                        score=float(raw["scope"]["score"]),
+                        reason=raw["scope"]["reason"],
+                        is_blocking=bool(raw["scope"]["is_blocking"]),
+                    ),
+                    preference=AmbiguityScore(
+                        axis=AmbiguityType.PREFERENCE,
+                        score=float(raw["preference"]["score"]),
+                        reason=raw["preference"]["reason"],
+                        is_blocking=bool(raw["preference"]["is_blocking"]),
+                    ),
+                )
+    except Exception:
+        pass
+
+    # Fail-safe: if scoring fails for any reason, return conservative blocking scores.
+    # This ensures the system asks rather than makes wrong assumptions on error.
+    _conservative = AmbiguityScore(
+        axis=AmbiguityType.ATTRIBUTE,
+        score=0.70,
+        reason="Scoring failed — treating as ambiguous for safety.",
+        is_blocking=True,
+    )
+    return AmbiguityScores(
+        attribute=_conservative.model_copy(update={"axis": AmbiguityType.ATTRIBUTE}),
+        scope=_conservative.model_copy(update={"axis": AmbiguityType.SCOPE}),
+        preference=_conservative.model_copy(update={"axis": AmbiguityType.PREFERENCE}),
+    )
