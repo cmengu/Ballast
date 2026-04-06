@@ -228,7 +228,7 @@ def _get_client() -> "anthropic.Anthropic":
 # ---------------------------------------------------------------------------
 
 def parse_spec(path: str) -> SpecModel:
-    """Read a spec.md file and return a draft SpecModel (locked_at='', version='').
+    """Read a spec.md file and return a draft SpecModel (locked_at='', version_hash='').
 
     Parses the ## intent, ## success criteria, ## constraints,
     ## escalation threshold, and ## tools allowed sections.
@@ -299,14 +299,16 @@ def parse_spec(path: str) -> SpecModel:
                         pass
 
     return SpecModel(
-        version="",
+        version_hash="",
         intent=intent,
         success_criteria=success_criteria,
         constraints=constraints,
+        irreversible_actions=[],
         drift_threshold=drift_threshold,
-        escalation_timeout_seconds=escalation_timeout,
         allowed_tools=allowed_tools,
+        scope="",
         locked_at="",
+        harness=HarnessProfile(escalation_timeout_seconds=escalation_timeout),
     )
 
 
@@ -462,16 +464,16 @@ def clarify(spec: SpecModel) -> SpecModel:
                 if unclear:
                     raise SpecTooVague(unclear)
                 return SpecModel(
-                    version="",
+                    version_hash="",
                     intent=raw.get("intent", spec.intent),
-                    success_criteria=raw.get(
-                        "success_criteria", spec.success_criteria
-                    ),
+                    success_criteria=raw.get("success_criteria", spec.success_criteria),
                     constraints=raw.get("constraints", spec.constraints),
+                    irreversible_actions=spec.irreversible_actions,
                     drift_threshold=spec.drift_threshold,
-                    escalation_timeout_seconds=spec.escalation_timeout_seconds,
                     allowed_tools=spec.allowed_tools,
+                    scope=spec.scope,
                     locked_at="",
+                    harness=spec.harness,
                 )
     except SpecTooVague:
         raise
