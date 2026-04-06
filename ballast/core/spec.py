@@ -77,8 +77,8 @@ class SpecDelta(BaseModel):
     Produced by SpecModel.diff(other).
     Consumed by hook.py to inject spec changes between Agent.iter nodes.
     """
-    from_version: str
-    to_version: str
+    from_hash: str
+    to_hash: str
     added_constraints: List[str] = Field(default_factory=list)
     removed_constraints: List[str] = Field(default_factory=list)
     added_tools: List[str] = Field(default_factory=list)
@@ -87,7 +87,7 @@ class SpecDelta(BaseModel):
 
     def as_injection(self) -> str:
         """Return a plain-text string the agent reads as mid-run context."""
-        lines = [f"[SPEC UPDATE {self.from_version} → {self.to_version}]"]
+        lines = [f"[BALLAST SPEC UPDATE: {self.from_hash[:8]} → {self.to_hash[:8]}]"]
         if self.added_constraints:
             lines.append(
                 f"NEW CONSTRAINTS (apply immediately): "
