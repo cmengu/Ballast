@@ -485,26 +485,30 @@ def clarify(spec: SpecModel) -> SpecModel:
 # ---------------------------------------------------------------------------
 
 def lock(spec: SpecModel) -> SpecModel:
-    """Stamp version and locked_at onto a draft SpecModel. Return locked copy.
+    """Stamp version_hash and locked_at onto a draft SpecModel. Return locked copy.
 
-    version = sha256(intent + '|'.join(sorted(success_criteria)))[:8]
+    version_hash = sha256(json.dumps of all non-harness non-identity fields, sort_keys=True)[:16]
     locked_at = UTC ISO-8601 timestamp ending in 'Z'
+
+    Fields excluded from hash: version_hash (being computed), locked_at (being set), harness (tuning).
+    Changing harness parameters does NOT change spec identity.
 
     Raises SpecAlreadyLocked if spec.locked_at is already set.
     Returns a new SpecModel — input is never mutated.
-    After lock(), treat the returned spec as immutable (invariant 1 + 2).
+    After lock(), treat the returned spec as immutable (invariants 1 + 2).
     """
     if spec.locked_at:
         raise SpecAlreadyLocked(
             f"spec already locked at {spec.locked_at} "
-            f"(version={spec.version})"
+            f"(version_hash={spec.version_hash})"
         )
 
-    raw = (spec.intent + "|".join(sorted(spec.success_criteria))).encode()
-    version = hashlib.sha256(raw).hexdigest()[:8]
+    hashable = spec.model_dump(exclude={"version_hash", "locked_at", "harness"})
+    raw = json.dumps(hashable, sort_keys=True)
+    version_hash = hashlib.sha256(raw.encode()).hexdigest()[:16]
     locked_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    return spec.model_copy(update={"version": version, "locked_at": locked_at})
+    return spec.model_copy(update={"version_hash": version_hash, "locked_at": locked_at})
 
 
 # ---------------------------------------------------------------------------
