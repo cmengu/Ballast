@@ -78,16 +78,16 @@ async def run_with_live_spec(
             # Stamp this node in the audit log
             audit_log.append({
                 "node_index": node_index,
-                "spec_hash": active_spec.version,
+                "spec_hash": active_spec.version_hash,
                 "node_type": type(node).__name__,
                 "delta_injected": (
-                    f"{delta.from_version[:8]}→{delta.to_version[:8]}"
+                    f"{delta.from_hash[:8]}→{delta.to_hash[:8]}"
                     if delta else None
                 ),
             })
 
             print(
-                f"  node {node_index:02d} | spec:{active_spec.version[:8]}"
+                f"  node {node_index:02d} | spec:{active_spec.version_hash[:8]}"
                 f" | {type(node).__name__}"
             )
 
