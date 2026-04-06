@@ -42,6 +42,35 @@ from pydantic import BaseModel, Field
 # SpecDelta — diff between two locked SpecModel versions
 # ---------------------------------------------------------------------------
 
+class HarnessProfile(BaseModel):
+    """Model-adaptive harness parameters.
+
+    Excluded from version_hash — tuning changes do not invalidate the spec contract.
+    Architectural invariants (spec fields) never change; these tune execution to model capability.
+    """
+    model: Literal["sonnet", "opus"] = "sonnet"
+    context_window_size: int = 8
+    checkpoint_every_n_nodes: int = 10
+    enable_layer2_judge: bool = True
+    escalation_timeout_seconds: int = 300
+    enable_environment_probe: bool = True
+    spec_poll_interval_nodes: int = 1
+
+    @classmethod
+    def for_model(cls, model: str) -> "HarnessProfile":
+        if model == "opus":
+            return cls(
+                model="opus",
+                context_window_size=16,
+                checkpoint_every_n_nodes=20,
+                enable_layer2_judge=False,
+                escalation_timeout_seconds=600,
+                enable_environment_probe=True,
+                spec_poll_interval_nodes=1,
+            )
+        return cls()
+
+
 class SpecDelta(BaseModel):
     """Diff between two locked SpecModel versions.
 
