@@ -4,12 +4,12 @@ Public interface:
     parse_spec(path)        — reads spec.md, returns draft SpecModel (locked_at='')
     score_specificity(spec) — LLM: how verifiable is this spec? 0.0–1.0
     clarify(spec)           — LLM: enrich vague fields; raises SpecTooVague if impossible
-    lock(spec)              — stamps version + locked_at; returns immutable-by-convention copy
+    lock(spec)              — stamps version_hash + locked_at; returns immutable-by-convention copy
     is_locked(spec)         — True if locked_at is non-empty
 
 Invariants (from projet-overview.md):
     1. spec locks before any agent executes — enforce with is_locked() guard in callers
-    2. spec version travels with every job — version is sha256(intent+criteria)[:8], set at lock()
+    2. spec version_hash travels with every job — sha256(json non-harness fields)[:16], set at lock()
     3. locked spec is immutable by convention — never mutate a SpecModel after lock()
 
 spec.md format:
