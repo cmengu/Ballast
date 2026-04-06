@@ -29,9 +29,10 @@ spec.md format:
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
-from typing import List
+from typing import List, Literal
 
 import anthropic
 from pydantic import BaseModel, Field
