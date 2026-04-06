@@ -252,7 +252,7 @@ def test_drift_result_spec_version_matches_spec():
     with patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
          patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0):
         result = checker.check(FakeToolNode("t"))
-    assert result.spec_version == spec.version
+    assert result.spec_version == spec.version_hash
 
 
 def test_drift_result_threshold_matches_spec_drift_threshold():

@@ -58,7 +58,7 @@ class DriftResult(BaseModel):
         )
     )
     node_type: str = Field(description="type(node).__name__ of the scored pydantic-ai node")
-    spec_version: str = Field(description="SpecModel.version — identifies spec in effect")
+    spec_version: str = Field(description="SpecModel.version_hash — identifies spec in effect")
     raised_at_step: int = Field(description="1-indexed monotonic step counter")
     threshold: float = Field(description="spec.drift_threshold applied at this step")
 
@@ -474,7 +474,7 @@ class TrajectoryChecker:
             constraint_score=round(constraint_score, 4),
             failing_dimension=failing,
             node_type=type(node).__name__,
-            spec_version=self.spec.version,
+            spec_version=self.spec.version_hash,
             raised_at_step=self._step,
             threshold=self.spec.drift_threshold,
         )
@@ -485,7 +485,7 @@ class TrajectoryChecker:
             "drift_check step=%d score=%.3f intent=%.3f tool=%.3f "
             "constraint=%.3f failing=%r spec_version=%s node_type=%s",
             self._step, aggregate, intent_score, tool_score,
-            constraint_score, failing, self.spec.version,
+            constraint_score, failing, self.spec.version_hash,
             type(node).__name__,
         )
 
@@ -557,6 +557,6 @@ async def run_with_spec(agent: Agent, task: str, spec: SpecModel) -> Any:
     logger.warning(
         "run_with_spec: output extraction failed — agent_run has neither "
         "get_output() nor .result. spec_version=%s",
-        spec.version,
+        spec.version_hash,
     )
     return None
