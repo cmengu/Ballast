@@ -51,7 +51,7 @@ def test_post_stores_spec_and_returns_version():
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["version"] == spec.version
+    assert body["version_hash"] == spec.version_hash
 
 
 def test_get_returns_stored_spec():
@@ -60,7 +60,7 @@ def test_get_returns_stored_spec():
     r = client.get("/spec/job-001/current")
     assert r.status_code == 200
     data = r.json()
-    assert data["version"] == spec.version
+    assert data["version_hash"] == spec.version_hash
     assert data["intent"] == "do something"
 
 
@@ -70,7 +70,7 @@ def test_post_overwrites_existing_spec():
     client.post("/spec/job-001/update", json=spec_v1.model_dump())
     client.post("/spec/job-001/update", json=spec_v2.model_dump())
     r = client.get("/spec/job-001/current")
-    assert r.json()["version"] == spec_v2.version
+    assert r.json()["version_hash"] == spec_v2.version_hash
 
 
 # ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ def test_poller_returns_new_spec_when_version_changed():
     with patch("ballast.core.sync.httpx.get", return_value=mock_r):
         result = poller.poll()
     assert result is not None
-    assert result.version == spec_v2.version
+    assert result.version_hash == spec_v2.version_hash
     assert result.intent == "do y"
 
 

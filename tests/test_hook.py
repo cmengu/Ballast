@@ -120,7 +120,7 @@ def test_audit_log_entry_fields():
 
     entry = audit_log[0]
     assert entry["node_index"] == 0
-    assert entry["spec_hash"] == spec.version
+    assert entry["spec_hash"] == spec.version_hash
     assert entry["node_type"] == "_MockNode"
     assert entry["delta_injected"] is None
 
@@ -137,17 +137,16 @@ def test_spec_update_switches_hash_in_audit_log():
 
     _, audit_log = asyncio.run(run_with_live_spec(agent, "task", spec_v1, poller))
 
-    assert audit_log[0]["spec_hash"] == spec_v1.version
-    assert audit_log[1]["spec_hash"] == spec_v2.version
-    assert audit_log[2]["spec_hash"] == spec_v2.version
+    assert audit_log[0]["spec_hash"] == spec_v1.version_hash
+    assert audit_log[1]["spec_hash"] == spec_v2.version_hash
+    assert audit_log[2]["spec_hash"] == spec_v2.version_hash
 
 
 def test_spec_update_injects_model_request():
     """When spec changes, a ModelRequest containing the constraint is appended to message_history.
 
-    Note: spec_v1 and spec_v2 share the same version hash (same intent+criteria).
-    The version hash is not what we're testing — we're testing injection content.
-    delta_injected in the audit log will show 'XXXXXXXX→XXXXXXXX' (same hash) — correct.
+    Note: spec_v1 and spec_v2 differ by constraints, so version_hash values differ.
+    We're testing injection content (constraint text), not delta hash display.
     """
     nodes = [_MockNode(), _MockNode()]
     spec_v1 = _locked_spec(intent="Task A", success_criteria=["done A"])
@@ -203,7 +202,7 @@ def test_print_format(capsys):
     asyncio.run(run_with_live_spec(agent, "task", spec, poller))
 
     captured = capsys.readouterr()
-    assert f"  node 00 | spec:{spec.version[:8]} | _MockNode" in captured.out
+    assert f"  node 00 | spec:{spec.version_hash[:8]} | _MockNode" in captured.out
 
 
 def test_on_node_callback_called_with_correct_args():
@@ -216,12 +215,12 @@ def test_on_node_callback_called_with_correct_args():
     calls: list = []
 
     async def on_node(node_index, node, active_spec, delta):
-        calls.append((node_index, type(node).__name__, active_spec.version, delta))
+        calls.append((node_index, type(node).__name__, active_spec.version_hash, delta))
 
     asyncio.run(run_with_live_spec(agent, "task", spec, poller, on_node=on_node))
 
     assert len(calls) == 2
     assert calls[0][0] == 0
     assert calls[1][0] == 1
-    assert calls[0][2] == spec.version
+    assert calls[0][2] == spec.version_hash
     assert calls[0][3] is None   # no delta at node 0
