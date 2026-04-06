@@ -25,6 +25,6 @@ def get_spec(job_id: str) -> dict:
 
 @app.post("/spec/{job_id}/update")
 def update_spec(job_id: str, spec: SpecModel) -> dict:
-    """Store the new spec for this job. Returns version for confirmation."""
+    """Store the new spec for this job. Returns version_hash for confirmation."""
     _current_spec[job_id] = spec.model_dump()
-    return {"status": "ok", "version": spec.version}
+    return {"status": "ok", "version_hash": spec.version_hash}
