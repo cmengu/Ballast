@@ -118,10 +118,13 @@ class SpecModel(BaseModel):
 
     Do not construct directly — use parse_spec() or build fields explicitly,
     then call lock() before passing to any agent execution function.
+
+    version_hash: sha256(all non-harness fields, json-sorted)[:16]. Set by lock(). Empty = draft.
+    harness: excluded from version_hash — tuning changes do not invalidate the contract.
     """
-    version: str = Field(
+    version_hash: str = Field(
         default="",
-        description="sha256(intent + sorted_criteria)[:8]. Set by lock(). Empty = draft.",
+        description="sha256(all non-harness fields, json-sorted)[:16]. Set by lock(). Empty = draft.",
     )
     intent: str = Field(
         description="One sentence: what the agent is trying to achieve.",
@@ -134,19 +137,23 @@ class SpecModel(BaseModel):
         default_factory=list,
         description="What the agent must never do.",
     )
+    irreversible_actions: List[str] = Field(
+        default_factory=list,
+        description="Tool names whose effects cannot be undone. Triggers hard interrupt in guardrails.",
+    )
     drift_threshold: float = Field(
         default=0.4,
         ge=0.0,
         le=1.0,
         description="Minimum acceptable drift score. Below this → DriftDetected.",
     )
-    escalation_timeout_seconds: int = Field(
-        default=300,
-        description="Seconds before CEO agent decides without human response.",
-    )
     allowed_tools: List[str] = Field(
         default_factory=list,
         description="Tool names the agent may call. Empty = all tools allowed.",
+    )
+    scope: str = Field(
+        default="",
+        description="Optional scope constraint (e.g. 'this repo only'). Empty = unconstrained.",
     )
     locked_at: str = Field(
         default="",
@@ -154,18 +161,22 @@ class SpecModel(BaseModel):
     )
     parent_hash: str = Field(
         default="",
-        description="version of the spec this was derived from. Empty = root spec.",
+        description="version_hash of the spec this was derived from. Empty = root spec.",
+    )
+    harness: HarnessProfile = Field(
+        default_factory=HarnessProfile,
+        description="Execution tuning parameters. Excluded from version_hash.",
     )
 
     def diff(self, other: "SpecModel") -> "SpecDelta":
         """Return a SpecDelta describing what changed from self to other.
 
-        Caller: hook.py — active_spec.diff(new_spec) at every node boundary.
+        Caller: trajectory.py — active_spec.diff(new_spec) at every node boundary.
         Both specs should be locked before calling diff().
         """
         return SpecDelta(
-            from_version=self.version,
-            to_version=other.version,
+            from_hash=self.version_hash,
+            to_hash=other.version_hash,
             added_constraints=[c for c in other.constraints if c not in self.constraints],
             removed_constraints=[c for c in self.constraints if c not in other.constraints],
             added_tools=[t for t in other.allowed_tools if t not in self.allowed_tools],
