@@ -1,7 +1,7 @@
 """ballast/core/sync.py — SpecPoller (M2 side).
 
 Polls the spec server at every Agent.iter node boundary.
-Returns a new SpecModel only when the version field changes.
+Returns a new SpecModel only when the version_hash field changes.
 
 Never raises — M5 unreachable must not abort an M2 agent run.
 
@@ -24,7 +24,7 @@ from ballast.core.spec import SpecModel
 class SpecPoller:
     """Client-side poller that detects live spec changes from the server.
 
-    poll() compares SpecModel.version (8-char sha256) — not a timestamp.
+    poll() compares SpecModel.version_hash (16-char sha256) — not a timestamp.
     Caller must call set_initial() before poll() or poll() returns None always.
     """
 
@@ -39,7 +39,7 @@ class SpecPoller:
     def poll(self) -> SpecModel | None:
         """Check server for a spec update.
 
-        Returns new SpecModel if version changed since last call.
+        Returns new SpecModel if version_hash changed since last call.
         Returns None if unchanged, server unreachable, or set_initial() not called.
         Never raises.
         """
@@ -50,7 +50,7 @@ class SpecPoller:
             if r.status_code != 200:
                 return None
             data = r.json()
-            if not data or data.get("version") == self._current.version:
+            if not data or data.get("version_hash") == self._current.version_hash:
                 return None
             new_spec = SpecModel(**data)
             self._current = new_spec   # update baseline so next poll compares correctly
