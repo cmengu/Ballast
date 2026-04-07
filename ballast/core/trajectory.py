@@ -22,13 +22,18 @@ Key invariant:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Literal, Optional
 
 import anthropic
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.spec import SpecModel, is_locked
+from ballast.core.sync import SpecPoller
 
 logger = logging.getLogger(__name__)
 
@@ -371,6 +376,91 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
     except Exception:
         pass
     return 0.5  # Fail-safe: neutral on error
+
+
+# ---------------------------------------------------------------------------
+# DriftLabel — the cascade label system
+# ---------------------------------------------------------------------------
+
+DriftLabel = Literal["PROGRESSING", "STALLED", "VIOLATED", "VIOLATED_IRREVERSIBLE"]
+
+
+def score_drift(
+    node: Any,
+    full_window: list,
+    spec: SpecModel,
+) -> tuple[float, str, str]:
+    """Layer 1 cascade: score a node and return (score, label, rationale).
+
+    Step 1 — Heuristic gate (no LLM, ~0ms):
+        irreversibility check (spec.irreversible_actions)
+        tool compliance check (spec.allowed_tools)
+
+    Step 2 — LLM scorers (interim Layer 1; replaced by evaluate_node at Step 10):
+        score >= 0.85 → PROGRESSING  (skip Layer 2)
+        score <= 0.25 → VIOLATED     (skip Layer 2)
+        else          → STALLED      (Layer 2 stub — wired at Step 10)
+
+    Returns:
+        (aggregate_score, label, rationale)
+    """
+    _, content, tool_info = _extract_node_info(node)
+    tool_name = tool_info.get("tool_name", "")
+
+    # ── Heuristic gate ────────────────────────────────────────────────────
+    if tool_name and spec.irreversible_actions and tool_name in spec.irreversible_actions:
+        return 0.0, "VIOLATED_IRREVERSIBLE", f"irreversible tool: {tool_name}"
+
+    tool_score = score_tool_compliance(node, spec)
+    if tool_score == 0.0:
+        return 0.0, "VIOLATED", f"tool not in allowed_tools: {tool_name}"
+
+    if not content and not tool_name:
+        return 1.0, "PROGRESSING", "no scoreable content"
+
+    # ── LLM scorers ───────────────────────────────────────────────────────
+    # Interim Layer 1: uses existing scorers until evaluator.py is built (Step 10).
+    constraint_score = score_constraint_violation(node, spec)
+    intent_score = score_intent_alignment(node, spec)
+    aggregate = min(tool_score, constraint_score, intent_score)
+
+    # ── Label assignment ──────────────────────────────────────────────────
+    if aggregate >= 0.85:
+        label = "PROGRESSING"
+    elif aggregate <= 0.25:
+        label = "VIOLATED"
+    else:
+        # LAYER_2_STUB: passes as STALLED until evaluator.py is wired at Step 10.
+        label = "STALLED"
+
+    rationale = (
+        f"intent={intent_score:.2f} constraint={constraint_score:.2f} "
+        f"tool={tool_score:.2f}"
+    )
+    return round(aggregate, 4), label, rationale
+
+
+def _compact_node(
+    node: Any,
+    score: float,
+    label: str,
+    cost_usd: float,
+    verified: bool,
+) -> dict:
+    """Compact an evicted node to a summary dict for compact_history.
+
+    compact_history is the portion of the context window beyond full_window.
+    Passed as context to the Layer 2 evaluator (Step 10) and escalation (Step 7).
+    """
+    _, content, tool_info = _extract_node_info(node)
+    return {
+        "tool_name": tool_info.get("tool_name", ""),
+        "label": label,
+        "score": round(score, 3),
+        "cost_usd": cost_usd,
+        "verified": verified,
+        "summary": content[:200],
+    }
 
 
 # ---------------------------------------------------------------------------
