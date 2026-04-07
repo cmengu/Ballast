@@ -5,7 +5,7 @@ score_tool_compliance is tested directly (pure Python, no LLM).
 Integration test requires ANTHROPIC_API_KEY. Skip with: pytest -m 'not integration'
 """
 import os
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -312,3 +312,216 @@ def test_trajectory_checker_real_llm():
         f"constraint={result.constraint_score:.2f} "
         f"failing={result.failing_dimension}"
     )
+
+
+# ---------------------------------------------------------------------------
+# score_drift — label system (Step 2 additions)
+# ---------------------------------------------------------------------------
+
+import asyncio
+from contextlib import asynccontextmanager
+
+from ballast.core.checkpoint import BallastProgress
+from ballast.core.trajectory import _compact_node, run_with_spec, score_drift
+
+
+def _make_spec_with_irreversible() -> SpecModel:
+    return lock(SpecModel(
+        intent="count words",
+        success_criteria=["returns integer"],
+        irreversible_actions=["send_email"],
+        allowed_tools=["read_file"],
+        drift_threshold=0.4,
+    ))
+
+
+def test_score_drift_irreversible_tool_returns_violated_irreversible():
+    spec = _make_spec_with_irreversible()
+    s, lbl, _ = score_drift(FakeToolNode("send_email"), [], spec)
+    assert lbl == "VIOLATED_IRREVERSIBLE"
+    assert s == 0.0
+
+
+def test_score_drift_forbidden_tool_returns_violated():
+    spec = _make_spec_with_irreversible()
+    s, lbl, _ = score_drift(FakeToolNode("forbidden"), [], spec)
+    assert lbl == "VIOLATED"
+    assert s == 0.0
+
+
+def test_score_drift_clean_node_returns_progressing():
+    spec = _make_spec_with_irreversible()
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9):
+        s, lbl, rationale = score_drift(FakeTextNode("good output"), [], spec)
+    assert lbl == "PROGRESSING"
+    assert s == 0.9
+    assert "intent=" in rationale
+
+
+def test_score_drift_borderline_returns_stalled():
+    spec = _make_spec_with_irreversible()
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.6), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.6):
+        s, lbl, _ = score_drift(FakeTextNode("unclear"), [], spec)
+    assert lbl == "STALLED"
+    assert 0.25 < s < 0.85
+
+
+def test_score_drift_low_score_returns_violated():
+    spec = _make_spec_with_irreversible()
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.1), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9):
+        s, lbl, _ = score_drift(FakeTextNode("bad action"), [], spec)
+    assert lbl == "VIOLATED"
+    assert s <= 0.25
+
+
+def test_score_drift_empty_node_returns_progressing():
+    spec = _make_spec_with_irreversible()
+    s, lbl, _ = score_drift(FakeEmptyNode(), [], spec)
+    assert lbl == "PROGRESSING"
+    assert s == 1.0
+
+
+def test_compact_node_returns_expected_keys():
+    compact = _compact_node(FakeTextNode("some output"), 0.9, "PROGRESSING", 0.001, True)
+    assert set(compact.keys()) == {"tool_name", "label", "score", "cost_usd", "verified", "summary"}
+    assert compact["label"] == "PROGRESSING"
+    assert compact["score"] == 0.9
+    assert "some output" in compact["summary"]
+
+
+# ---------------------------------------------------------------------------
+# run_with_spec — orchestration loop (Step 3 additions)
+# ---------------------------------------------------------------------------
+
+
+class _RwsNode:
+    """Minimal stand-in for a pydantic-ai node (no tool, no content)."""
+
+
+class _RwsAgentRun:
+    """Mock AgentRun for run_with_spec tests.
+
+    Exposes get_output() so the preferred output-extraction branch fires.
+    Without get_output(), the fallback uses result.data which auto-exists
+    as a MagicMock sub-attribute — causing assertion failures on string equality.
+    """
+
+    def __init__(self, nodes, output="done"):
+        self._nodes = nodes
+        self._output = output
+        self.message_history = []
+
+        state = MagicMock()
+        state.message_history = self.message_history
+        ctx = MagicMock()
+        ctx.state = state
+        self._ctx = ctx
+
+    @property
+    def ctx(self):
+        return self._ctx
+
+    async def get_output(self):
+        return self._output
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for node in self._nodes:
+            yield node
+
+
+def _rws_make_agent(nodes, output="done"):
+    """Return (mock_agent, mock_run) for run_with_spec tests."""
+    run = _RwsAgentRun(nodes, output)
+    agent = MagicMock()
+
+    @asynccontextmanager
+    async def _iter(task):
+        yield run
+
+    agent.iter = _iter
+    return agent, run
+
+
+def _rws_make_poller(return_values):
+    poller = MagicMock()
+    poller.poll.side_effect = return_values
+    return poller
+
+
+def test_run_with_spec_requires_locked_spec():
+    draft = SpecModel(intent="x", success_criteria=["y"])
+    agent, _ = _rws_make_agent([])
+    with pytest.raises(ValueError, match="locked"):
+        asyncio.run(run_with_spec(agent, "task", draft))
+
+
+def test_run_with_spec_returns_output(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    spec = _make_spec()
+    nodes = [_RwsNode(), _RwsNode()]
+    agent, _ = _rws_make_agent(nodes, output="my result")
+    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+        out = asyncio.run(run_with_spec(agent, "task", spec))
+    assert out == "my result"
+
+
+def test_run_with_spec_writes_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    spec = _make_spec()
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent(nodes)
+    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+        asyncio.run(run_with_spec(agent, "task", spec))
+    progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
+    assert progress is not None
+    assert progress.is_complete is True
+    assert len(progress.completed_node_summaries) == 1
+
+
+def test_run_with_spec_node_summary_uses_active_spec_hash(tmp_path, monkeypatch):
+    """Critical: NodeSummary.spec_hash must be active_spec.version_hash, not dispatch hash."""
+    monkeypatch.chdir(tmp_path)
+    spec = lock(SpecModel(intent="Task A", success_criteria=["done A"]))
+    spec_v2 = lock(SpecModel(intent="Task B", success_criteria=["done B"]))
+    assert spec.version_hash != spec_v2.version_hash
+
+    nodes = [_RwsNode(), _RwsNode()]
+    agent, _ = _rws_make_agent(nodes)
+    # spec_v2 returned at node 0 poll; None at node 1
+    poller = _rws_make_poller([spec_v2, None])
+
+    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+        asyncio.run(run_with_spec(agent, "task", spec, poller=poller))
+
+    progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
+    # Both nodes must be stamped with spec_v2 (active after node-0 poll)
+    assert progress.completed_node_summaries[0].spec_hash == spec_v2.version_hash
+    assert progress.completed_node_summaries[1].spec_hash == spec_v2.version_hash
+
+
+def test_run_with_spec_violation_increments_counter(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    spec = _make_spec(drift_threshold=0.7)
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent(nodes)
+    with patch("ballast.core.trajectory.score_drift", return_value=(0.3, "VIOLATED", "bad")):
+        asyncio.run(run_with_spec(agent, "task", spec))
+    progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
+    assert progress.total_violations == 1
+    assert progress.total_drift_events == 1
+
+
+def test_run_with_spec_no_poller_skips_injection(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    spec = _make_spec()
+    nodes = [_RwsNode()]
+    agent, run = _rws_make_agent(nodes)
+    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+        asyncio.run(run_with_spec(agent, "task", spec))
+    assert run.message_history == []
