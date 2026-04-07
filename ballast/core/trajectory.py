@@ -1,23 +1,22 @@
-"""ballast/core/trajectory.py — Mid-run drift detection.
+"""ballast/core/trajectory.py — Node-boundary orchestration and drift detection.
 
 Public interface:
-    run_with_spec(agent, task, spec)  — wraps Agent.iter; checks every node
-    TrajectoryChecker                  — check(node) → DriftResult | None
-    DriftResult                        — scored assessment of one node
-    DriftDetected                      — raised when score < spec.drift_threshold
+    run_with_spec(agent, task, spec, poller=None)
+                      — 7-step orchestration loop; spec poll, drift score,
+                        context window, checkpoint, correction inject.
+    score_drift(node, full_window, spec)
+                      — Layer 1 cascade: returns (score, label, rationale).
+    TrajectoryChecker — single-node, fixed-spec drift scorer (simpler API).
+    DriftResult       — scored assessment of one node (used by TrajectoryChecker).
+    DriftDetected     — raised by TrajectoryChecker.check() when score < threshold.
 
 Score dimensions (aggregate = min of all three):
-    score_tool_compliance      — rule-based (never LLM): is tool in allowed_tools?
+    score_tool_compliance      — rule-based: is tool in allowed_tools?
     score_constraint_violation — LLM: did action breach a hard constraint?
     score_intent_alignment     — LLM: is action moving toward the goal?
 
 Threshold: spec.drift_threshold (travels with the spec — invariant 2).
 Interception: pydantic-ai Agent.iter node boundaries (duck-typed for version resilience).
-
-Key invariant:
-    trajectory.py detects and reports. guardrails.py decides what happens next.
-    DriftDetected is NEVER caught inside this module (only in run_with_spec for logging,
-    then immediately re-raised).
 """
 from __future__ import annotations
 
@@ -594,59 +593,192 @@ class TrajectoryChecker:
 # run_with_spec — top-level entry point
 # ---------------------------------------------------------------------------
 
-async def run_with_spec(agent: Agent, task: str, spec: SpecModel) -> Any:
-    """Run agent against task, checking every node against the locked spec.
+async def run_with_spec(
+    agent: Agent,
+    task: str,
+    spec: SpecModel,
+    poller: Optional[SpecPoller] = None,
+) -> Any:
+    """Full 7-step node-boundary orchestration loop.
 
-    Calls TrajectoryChecker.check(node) at every Agent.iter node.
-    On DriftDetected: logs as warning (OTel placeholder), then re-raises.
-    guardrails.py catches DriftDetected and decides the escalation policy.
+    At every node boundary:
+        1. Poll M5 for spec update → inject SpecDelta if version changed
+        2. Cascade drift score (Layer 1; Layer 2 stubbed until Step 10)
+        3. Environment probe (stubbed until Step 9)
+        4. Drift response — inject correction or log escalation
+        5. Context window management (full_window + compact_history)
+        6. Checkpoint write every checkpoint_every_n_nodes nodes
+        7. OTel emit (stubbed until Step 13)
 
     Args:
-        agent:  A pydantic-ai Agent instance.
-        task:   The task string to run.
-        spec:   A LOCKED SpecModel — is_locked(spec) must be True.
+        agent:   pydantic-ai Agent instance.
+        task:    Task string to run.
+        spec:    Locked SpecModel — is_locked(spec) must be True.
+        poller:  Optional SpecPoller. If None, spec stays fixed for the run.
 
     Returns:
-        The agent's final output.
+        Final agent output.
 
     Raises:
         ValueError if spec is not locked.
-        DriftDetected if any node scores below spec.drift_threshold.
     """
     if not is_locked(spec):
         raise ValueError(
             "spec must be locked before executing. Call lock(spec) first."
         )
 
-    checker = TrajectoryChecker(spec)
+    run_id = str(uuid.uuid4())[:8]
+    active_spec = spec
+
+    # Resume from checkpoint if available
+    progress = BallastProgress.read()
+    if (
+        progress
+        and progress.spec_hash == spec.version_hash
+        and not progress.is_complete
+    ):
+        task = f"{progress.resume_context()}\n\nOriginal task: {task}"
+        node_offset = progress.last_clean_node_index + 1
+        logger.info(
+            "run_with_spec resuming run_id=%s from node=%d spec_version=%s",
+            progress.run_id, node_offset, spec.version_hash,
+        )
+    else:
+        progress = BallastProgress(
+            spec_hash=spec.version_hash,
+            active_spec_hash=spec.version_hash,
+            spec_intent=spec.intent,
+            run_id=run_id,
+            started_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
+            remaining_success_criteria=list(spec.success_criteria),
+        )
+        node_offset = 0
+
+    full_window: list = []
+    compact_history: list[dict] = []
+    node_index = node_offset
 
     async with agent.iter(task) as agent_run:
         async for node in agent_run:
-            try:
-                checker.check(node)
-            except DriftDetected as e:
-                # OTel placeholder — Week 3: replace with emit_drift_span(e.result)
-                logger.warning(
-                    "drift_detected step=%d score=%.3f failing=%r "
-                    "spec_version=%s node_type=%s threshold=%.2f",
-                    e.result.raised_at_step,
-                    e.result.score,
-                    e.result.failing_dimension,
-                    e.result.spec_version,
-                    e.result.node_type,
-                    e.result.threshold,
-                )
-                raise  # Never swallow — guardrails.py handles
 
-    # Extract final output — defensive for pydantic-ai version differences
+            # ── 1. Poll for spec update ─────────────────────────────────
+            if poller and node_index % active_spec.harness.spec_poll_interval_nodes == 0:
+                new_spec = poller.poll()
+                if new_spec:
+                    delta = active_spec.diff(new_spec)
+                    active_spec = new_spec
+                    agent_run.ctx.state.message_history.append(
+                        ModelRequest(parts=[UserPromptPart(content=delta.as_injection())])
+                    )
+                    progress.active_spec_hash = active_spec.version_hash
+                    progress.spec_transitions.append({
+                        "at_node": node_index,
+                        "from_hash": delta.from_hash,
+                        "to_hash": delta.to_hash,
+                    })
+                    logger.info(
+                        "spec_updated from=%s to=%s at_node=%d run_id=%s",
+                        delta.from_hash[:8], delta.to_hash[:8], node_index, run_id,
+                    )
+
+            # ── 2. Cascade drift score ──────────────────────────────────
+            score, label, rationale = score_drift(node, full_window, active_spec)
+
+            # ── 3. Environment probe — STUB ─────────────────────────────
+            # TODO Step 9: replace with verify_node_claim from ballast.core.probe
+            # if label in ("PROGRESSING", "COMPLETE"):
+            #     verified, probe_note = await verify_node_claim(node, label, active_spec)
+            #     if not verified:
+            #         label, score = "VIOLATED", 0.0
+            #         rationale = f"probe failed: {probe_note}"
+            verified = True
+
+            # ── 4. Drift response ───────────────────────────────────────
+            node_cost = getattr(node, "cost_usd", 0.0)
+            _, _, tool_info = _extract_node_info(node)
+
+            if label == "VIOLATED_IRREVERSIBLE":
+                # TODO Step 7: replace with escalate() from ballast.core.escalation
+                # resolution = await escalate(node, active_spec, compact_history + full_window)
+                # agent_run.ctx.state.message_history.append(
+                #     ModelRequest(parts=[UserPromptPart(content=resolution)])
+                # )
+                progress.total_violations += 1
+                progress.last_escalation = datetime.now(timezone.utc).isoformat()
+                logger.warning(
+                    "irreversible_action_detected node=%d tool=%s spec_version=%s run_id=%s",
+                    node_index,
+                    tool_info.get("tool_name", ""),
+                    active_spec.version_hash,
+                    run_id,
+                )
+
+            elif score < active_spec.drift_threshold:
+                # TODO Step 6: replace with build_correction() from ballast.core.guardrails
+                correction = (
+                    f"[BALLAST CORRECTION] Drift at node {node_index} "
+                    f"(score={score:.2f}, label={label}). "
+                    f"Rationale: {rationale}. "
+                    f"Re-align with intent: {active_spec.intent[:200]}"
+                )
+                agent_run.ctx.state.message_history.append(
+                    ModelRequest(parts=[UserPromptPart(content=correction)])
+                )
+                # TODO Step 13: emit_drift_span(node, active_spec, score, label)
+                logger.warning(
+                    "drift_detected node=%d score=%.3f label=%s spec_version=%s run_id=%s",
+                    node_index, score, label, active_spec.version_hash, run_id,
+                )
+                progress.total_drift_events += 1
+                if label == "VIOLATED":
+                    progress.total_violations += 1
+
+            # ── 5. Context window management ────────────────────────────
+            full_window.append(node)
+            if len(full_window) > active_spec.harness.context_window_size:
+                evicted = full_window.pop(0)
+                compact_history.append(
+                    _compact_node(evicted, score, label, node_cost, verified)
+                )
+
+            # ── 6. Checkpoint ───────────────────────────────────────────
+            progress.completed_node_summaries.append(NodeSummary(
+                index=node_index,
+                tool_name=tool_info.get("tool_name", ""),
+                label=label,
+                drift_score=score,
+                cost_usd=node_cost,
+                verified=verified,
+                spec_hash=active_spec.version_hash,   # active hash — NOT dispatch hash
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ))
+            progress.total_cost_usd += node_cost
+            progress.updated_at = datetime.now(timezone.utc).isoformat()
+            if label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
+                progress.last_clean_node_index = node_index
+            if node_index % active_spec.harness.checkpoint_every_n_nodes == 0:
+                progress.write()
+
+            # ── 7. OTel emit — STUB ─────────────────────────────────────
+            # TODO Step 13: emit_drift_span(node, active_spec, score, label)
+            # if label in ("VIOLATED", "VIOLATED_IRREVERSIBLE", "STALLED"):
+            #     emit_drift_span(node, active_spec, score, label)
+
+            node_index += 1
+
+    progress.is_complete = True
+    progress.write()
+
+    # Extract final output — defensive for pydantic-ai version differences.
+    # agent_run.get_output() is preferred; result.output is the fallback.
     if hasattr(agent_run, "get_output"):
         return await agent_run.get_output()
     result = getattr(agent_run, "result", None)
     if result is not None:
         return getattr(result, "data", getattr(result, "output", result))
     logger.warning(
-        "run_with_spec: output extraction failed — agent_run has neither "
-        "get_output() nor .result. spec_version=%s",
-        spec.version_hash,
+        "run_with_spec: output extraction failed. spec_version=%s run_id=%s",
+        spec.version_hash, run_id,
     )
     return None
