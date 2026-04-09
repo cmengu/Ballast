@@ -34,7 +34,6 @@ from filelock import FileLock
 from pydantic import BaseModel
 
 MEMORY_DIR = Path(".ballast_memory")
-MEMORY_DIR.mkdir(exist_ok=True)
 
 # Semantic consolidation every N real (non-trial) runs.
 CONSOLIDATE_EVERY = 3
@@ -487,7 +486,7 @@ def memory_report(scope: str) -> str:
     border = "═" * 67
     lines = [
         f"╔{border}╗",
-        f"║  Ballast Memory Report — {scope[:40]:<40}  ║",
+        f"║  Ballast Memory Report — {scope[:39]:<39}  ║",
         f"╠{border}╣",
     ]
 

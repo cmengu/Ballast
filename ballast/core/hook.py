@@ -22,10 +22,13 @@ Injection mechanism (confirmed against pydantic-ai source):
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Optional
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
+
+logger = logging.getLogger(__name__)
 
 from ballast.core.spec import SpecDelta, SpecModel
 from ballast.core.sync import SpecPoller
@@ -86,9 +89,9 @@ async def run_with_live_spec(
                 ),
             })
 
-            print(
-                f"  node {node_index:02d} | spec:{active_spec.version_hash[:8]}"
-                f" | {type(node).__name__}"
+            logger.debug(
+                "node=%02d spec=%s node_type=%s",
+                node_index, active_spec.version_hash[:8], type(node).__name__,
             )
 
             if on_node:

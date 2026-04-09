@@ -13,8 +13,9 @@ What it shows:
     - Audit log shows two distinct spec hash ranges with exact transition node
 
 Spec hash note:
-    lock() hashes intent + success_criteria only.
-    spec_v1 and spec_v2 must differ in success_criteria (not just constraints)
+    lock() hashes all non-harness fields (intent, success_criteria, constraints,
+    allowed_tools, drift_threshold, etc.).
+    spec_v1 and spec_v2 must differ in at least one of these fields
     to produce different version hashes and trigger SpecPoller detection.
 """
 from __future__ import annotations
@@ -76,7 +77,7 @@ async def push_spec_update() -> None:
             json=spec_v2.model_dump(),
             timeout=5.0,
         )
-    print(f"\n📝 Spec pushed → {spec_v2.version}")
+    print(f"\n📝 Spec pushed → {spec_v2.version_hash}")
     print(f"   constraint: {spec_v2.constraints[0]}")
 
 

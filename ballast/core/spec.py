@@ -30,12 +30,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import List, Literal
 
 import anthropic
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -477,8 +480,8 @@ def clarify(spec: SpecModel) -> SpecModel:
                 )
     except SpecTooVague:
         raise
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("clarify_error error=%s", e)
     return spec  # Fail-safe: return original unchanged
 
 

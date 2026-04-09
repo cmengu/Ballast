@@ -300,8 +300,8 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
         for block in response.content:
             if block.type == "tool_use":
                 return 0.0 if block.input.get("violation", False) else 1.0
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("constraint_scorer_error node=%s error=%s", type(node).__name__, e)
     return 0.5  # Fail-safe: neutral on error
 
 
@@ -372,8 +372,8 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
             if block.type == "tool_use":
                 score = float(block.input.get("score", 0.5))
                 return max(0.0, min(1.0, score))
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("intent_scorer_error node=%s error=%s", type(node).__name__, e)
     return 0.5  # Fail-safe: neutral on error
 
 

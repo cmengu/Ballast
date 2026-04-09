@@ -76,7 +76,7 @@ def test_spec_model_default_drift_threshold():
 
 
 def test_spec_model_default_escalation_timeout():
-    assert SpecModel(intent="x", success_criteria=["y"]).escalation_timeout_seconds == 300
+    assert SpecModel(intent="x", success_criteria=["y"]).harness.escalation_timeout_seconds == 300
 
 
 def test_spec_model_default_allowed_tools_empty():
@@ -88,7 +88,7 @@ def test_spec_model_default_locked_at_empty():
 
 
 def test_spec_model_default_version_empty():
-    assert SpecModel(intent="x", success_criteria=["y"]).version == ""
+    assert SpecModel(intent="x", success_criteria=["y"]).version_hash == ""
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +136,7 @@ def test_parse_spec_extracts_escalation_timeout():
     path = _write_spec(VALID_SPEC_MD)
     spec = parse_spec(path)
     os.unlink(path)
-    assert spec.escalation_timeout_seconds == 300
+    assert spec.harness.escalation_timeout_seconds == 300
 
 
 def test_parse_spec_extracts_allowed_tools():
@@ -151,7 +151,7 @@ def test_parse_spec_draft_has_empty_locked_at_and_version():
     spec = parse_spec(path)
     os.unlink(path)
     assert spec.locked_at == ""
-    assert spec.version == ""
+    assert spec.version_hash == ""
 
 
 def test_parse_spec_missing_intent_raises():
@@ -179,16 +179,16 @@ def test_parse_spec_uses_defaults_when_threshold_section_missing():
     spec = parse_spec(path)
     os.unlink(path)
     assert spec.drift_threshold == 0.4
-    assert spec.escalation_timeout_seconds == 300
+    assert spec.harness.escalation_timeout_seconds == 300
 
 
 # ---------------------------------------------------------------------------
 # lock
 # ---------------------------------------------------------------------------
 
-def test_lock_sets_version_8_chars():
+def test_lock_sets_version_16_chars():
     locked = lock(_make_draft())
-    assert len(locked.version) == 8
+    assert len(locked.version_hash) == 16
 
 
 def test_lock_sets_locked_at_iso_format():
@@ -199,7 +199,7 @@ def test_lock_sets_locked_at_iso_format():
 
 def test_lock_version_is_stable():
     draft = _make_draft()
-    assert lock(draft).version == lock(draft).version
+    assert lock(draft).version_hash == lock(draft).version_hash
 
 
 def test_lock_version_differs_for_different_intent():
@@ -208,16 +208,16 @@ def test_lock_version_differs_for_different_intent():
         intent="COMPLETELY DIFFERENT INTENT",
         success_criteria=["returns an integer", "integer is accurate"],
     )
-    assert lock(draft1).version != lock(draft2).version
+    assert lock(draft1).version_hash != lock(draft2).version_hash
 
 
 def test_lock_does_not_mutate_input():
     draft = _make_draft()
     locked = lock(draft)
     assert draft.locked_at == ""   # original unchanged
-    assert draft.version == ""
+    assert draft.version_hash == ""
     assert locked.locked_at != ""
-    assert locked.version != ""
+    assert locked.version_hash != ""
 
 
 def test_lock_raises_if_already_locked():
@@ -292,8 +292,8 @@ def test_spec_delta_from_and_to_version():
         constraints=["do not mention OpenAI"],
     ))
     delta = v1.diff(v2)
-    assert delta.from_version == v1.version
-    assert delta.to_version == v2.version
+    assert delta.from_hash == v1.version_hash
+    assert delta.to_hash == v2.version_hash
 
 
 def test_diff_detects_added_constraint():
@@ -357,7 +357,7 @@ def test_as_injection_contains_spec_update_header():
     ))
     delta = v1.diff(v2)
     injection = delta.as_injection()
-    assert f"[SPEC UPDATE {v1.version} → {v2.version}]" in injection
+    assert f"[BALLAST SPEC UPDATE: {v1.version_hash[:8]} → {v2.version_hash[:8]}]" in injection
     assert "do not mention OpenAI" in injection
     assert "[Continue from current node under updated spec.]" in injection
 
@@ -376,7 +376,7 @@ def test_parent_hash_travels_through_lock():
         intent="Write a report on AI companies",
         success_criteria=["report is written"],
         allowed_tools=["web_search", "write_file"],
-        parent_hash=v1.version,
+        parent_hash=v1.version_hash,
     )
     v2 = lock(draft_v2)
-    assert v2.parent_hash == v1.version
+    assert v2.parent_hash == v1.version_hash
