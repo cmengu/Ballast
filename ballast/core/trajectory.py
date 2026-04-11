@@ -1,7 +1,7 @@
 """ballast/core/trajectory.py — Node-boundary orchestration and drift detection.
 
 Public interface:
-    run_with_spec(agent, task, spec, poller=None)
+    run_with_spec(agent, task, spec, poller=None, cost_guard=None, agent_id="default")
                       — 7-step orchestration loop; spec poll, drift score,
                         context window, checkpoint, correction inject.
     score_drift(node, full_window, spec)
@@ -31,6 +31,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from ballast.core.checkpoint import BallastProgress, NodeSummary
+from ballast.core.cost import RunCostGuard
 from ballast.core.spec import SpecModel, is_locked
 from ballast.core.sync import SpecPoller
 
@@ -598,6 +599,8 @@ async def run_with_spec(
     task: str,
     spec: SpecModel,
     poller: Optional[SpecPoller] = None,
+    cost_guard: Optional[RunCostGuard] = None,
+    agent_id: str = "default",
 ) -> Any:
     """Full 7-step node-boundary orchestration loop.
 
@@ -614,7 +617,10 @@ async def run_with_spec(
         agent:   pydantic-ai Agent instance.
         task:    Task string to run.
         spec:    Locked SpecModel — is_locked(spec) must be True.
-        poller:  Optional SpecPoller. If None, spec stays fixed for the run.
+        poller:     Optional SpecPoller. If None, spec stays fixed for the run.
+        cost_guard: Optional RunCostGuard. If None, no cost enforcement is applied.
+        agent_id:   Agent identifier registered in cost_guard. Default "default".
+                    Ignored when cost_guard is None.
 
     Returns:
         Final agent output.
@@ -759,6 +765,11 @@ async def run_with_spec(
                 progress.last_clean_node_index = node_index
             if node_index % active_spec.harness.checkpoint_every_n_nodes == 0:
                 progress.write()
+
+            # ── 6b. Cost enforcement ────────────────────────────────────
+            if cost_guard is not None:
+                cost_guard.check(agent_id, node_cost)
+                cost_guard.record(agent_id, node_cost)
 
             # ── 7. OTel emit — STUB ─────────────────────────────────────
             # TODO Step 13: emit_drift_span(node, active_spec, score, label)
