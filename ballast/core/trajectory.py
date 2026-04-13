@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
@@ -379,10 +380,44 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
 
 
 # ---------------------------------------------------------------------------
+# NodeAssessment — typed return value for score_drift()
+# ---------------------------------------------------------------------------
+
+@dataclass
+class NodeAssessment:
+    """Typed result returned by score_drift().
+
+    Replaces the raw tuple[float, str, str] so callers access fields by name.
+    tool_name is included so run_with_spec() does not need a second
+    _extract_node_info() call after score_drift() returns.
+    """
+    score: float
+    label: str          # DriftLabel: PROGRESSING | STALLED | VIOLATED | VIOLATED_IRREVERSIBLE
+    rationale: str
+    tool_score: float
+    constraint_score: float
+    intent_score: float
+    tool_name: str      # empty string if node has no tool call
+
+
+# ---------------------------------------------------------------------------
 # DriftLabel — the cascade label system
 # ---------------------------------------------------------------------------
 
 DriftLabel = Literal["PROGRESSING", "STALLED", "VIOLATED", "VIOLATED_IRREVERSIBLE"]
+
+
+def _run_scorers(node: Any, spec: SpecModel) -> tuple[float, float, float]:
+    """Call all three scorers and return (tool_score, constraint_score, intent_score).
+
+    Private helper. Eliminates scorer duplication between score_drift() (LLM path)
+    and TrajectoryChecker.check(). Never raises — each scorer has its own fail-safe.
+    """
+    return (
+        score_tool_compliance(node, spec),
+        score_constraint_violation(node, spec),
+        score_intent_alignment(node, spec),
+    )
 
 
 def score_drift(
