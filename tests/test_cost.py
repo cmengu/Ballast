@@ -22,7 +22,12 @@ from ballast.core.cost import (
     RunCostGuard,
 )
 from ballast.core.spec import SpecModel, lock
-from ballast.core.trajectory import run_with_spec
+from ballast.core.trajectory import NodeAssessment, run_with_spec
+
+_MOCK_A_PROGRESSING = NodeAssessment(
+    score=1.0, label="PROGRESSING", rationale="",
+    tool_score=1.0, constraint_score=1.0, intent_score=1.0, tool_name="",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +215,7 @@ def test_run_with_spec_records_node_costs_in_guard(tmp_path, monkeypatch):
     agent, _ = _rws_make_agent(nodes, node_costs=[0.01, 0.02, 0.03])
     rg = RunCostGuard()
     rg.register("worker", cap=1.0, escalation_pool=0.1)
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg, agent_id="worker"))
     assert round(rg.total_spent, 4) == 0.06
 
@@ -224,7 +229,7 @@ def test_run_with_spec_agent_cap_stops_run(tmp_path, monkeypatch):
     agent, _ = _rws_make_agent(nodes, node_costs=[0.01, 0.01, 0.01])
     rg = RunCostGuard()
     rg.register("worker", cap=0.015, escalation_pool=0.0)
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         with pytest.raises(AgentCapExceeded):
             asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg, agent_id="worker"))
 
@@ -239,7 +244,7 @@ def test_run_with_spec_hard_cap_stops_run(tmp_path, monkeypatch):
     rg = RunCostGuard()
     rg.register("worker", cap=500.0, escalation_pool=0.0)
     rg._total = HARD_CAP_USD - 0.5
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         with pytest.raises(HardCapExceeded):
             asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg, agent_id="worker"))
 
@@ -250,6 +255,6 @@ def test_run_with_spec_no_cost_guard_is_backward_compatible(tmp_path, monkeypatc
     spec = _make_spec()
     nodes = [_RwsNode()]
     agent, _ = _rws_make_agent(nodes)
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         out = asyncio.run(run_with_spec(agent, "task", spec))
     assert out == "done"

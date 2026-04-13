@@ -322,7 +322,17 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from ballast.core.checkpoint import BallastProgress
-from ballast.core.trajectory import _compact_node, run_with_spec, score_drift
+from ballast.core.trajectory import NodeAssessment, _compact_node, run_with_spec, score_drift
+
+# Pre-built NodeAssessment stubs for run_with_spec mocks
+_A_PROGRESSING = NodeAssessment(
+    score=1.0, label="PROGRESSING", rationale="",
+    tool_score=1.0, constraint_score=1.0, intent_score=1.0, tool_name="",
+)
+_A_VIOLATED = NodeAssessment(
+    score=0.3, label="VIOLATED", rationale="bad",
+    tool_score=1.0, constraint_score=0.3, intent_score=1.0, tool_name="",
+)
 
 
 def _make_spec_with_irreversible() -> SpecModel:
@@ -337,51 +347,53 @@ def _make_spec_with_irreversible() -> SpecModel:
 
 def test_score_drift_irreversible_tool_returns_violated_irreversible():
     spec = _make_spec_with_irreversible()
-    s, lbl, _ = score_drift(FakeToolNode("send_email"), [], spec)
-    assert lbl == "VIOLATED_IRREVERSIBLE"
-    assert s == 0.0
+    a = score_drift(FakeToolNode("send_email"), [], spec)
+    assert a.label == "VIOLATED_IRREVERSIBLE"
+    assert a.score == 0.0
+    assert a.tool_name == "send_email"
 
 
 def test_score_drift_forbidden_tool_returns_violated():
     spec = _make_spec_with_irreversible()
-    s, lbl, _ = score_drift(FakeToolNode("forbidden"), [], spec)
-    assert lbl == "VIOLATED"
-    assert s == 0.0
+    a = score_drift(FakeToolNode("forbidden"), [], spec)
+    assert a.label == "VIOLATED"
+    assert a.score == 0.0
+    assert a.tool_name == "forbidden"
 
 
 def test_score_drift_clean_node_returns_progressing():
     spec = _make_spec_with_irreversible()
     with patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0), \
          patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9):
-        s, lbl, rationale = score_drift(FakeTextNode("good output"), [], spec)
-    assert lbl == "PROGRESSING"
-    assert s == 0.9
-    assert "intent=" in rationale
+        a = score_drift(FakeTextNode("good output"), [], spec)
+    assert a.label == "PROGRESSING"
+    assert a.score == 0.9
+    assert "intent=" in a.rationale
 
 
 def test_score_drift_borderline_returns_stalled():
     spec = _make_spec_with_irreversible()
     with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.6), \
          patch("ballast.core.trajectory.score_intent_alignment", return_value=0.6):
-        s, lbl, _ = score_drift(FakeTextNode("unclear"), [], spec)
-    assert lbl == "STALLED"
-    assert 0.25 < s < 0.85
+        a = score_drift(FakeTextNode("unclear"), [], spec)
+    assert a.label == "STALLED"
+    assert 0.25 < a.score < 0.85
 
 
 def test_score_drift_low_score_returns_violated():
     spec = _make_spec_with_irreversible()
     with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.1), \
          patch("ballast.core.trajectory.score_intent_alignment", return_value=0.9):
-        s, lbl, _ = score_drift(FakeTextNode("bad action"), [], spec)
-    assert lbl == "VIOLATED"
-    assert s <= 0.25
+        a = score_drift(FakeTextNode("bad action"), [], spec)
+    assert a.label == "VIOLATED"
+    assert a.score <= 0.25
 
 
 def test_score_drift_empty_node_returns_progressing():
     spec = _make_spec_with_irreversible()
-    s, lbl, _ = score_drift(FakeEmptyNode(), [], spec)
-    assert lbl == "PROGRESSING"
-    assert s == 1.0
+    a = score_drift(FakeEmptyNode(), [], spec)
+    assert a.label == "PROGRESSING"
+    assert a.score == 1.0
 
 
 def test_compact_node_returns_expected_keys():
@@ -466,7 +478,7 @@ def test_run_with_spec_returns_output(tmp_path, monkeypatch):
     spec = _make_spec()
     nodes = [_RwsNode(), _RwsNode()]
     agent, _ = _rws_make_agent(nodes, output="my result")
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
         out = asyncio.run(run_with_spec(agent, "task", spec))
     assert out == "my result"
 
@@ -476,7 +488,7 @@ def test_run_with_spec_writes_checkpoint(tmp_path, monkeypatch):
     spec = _make_spec()
     nodes = [_RwsNode()]
     agent, _ = _rws_make_agent(nodes)
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
         asyncio.run(run_with_spec(agent, "task", spec))
     progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
     assert progress is not None
@@ -496,7 +508,7 @@ def test_run_with_spec_node_summary_uses_active_spec_hash(tmp_path, monkeypatch)
     # spec_v2 returned at node 0 poll; None at node 1
     poller = _rws_make_poller([spec_v2, None])
 
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
         asyncio.run(run_with_spec(agent, "task", spec, poller=poller))
 
     progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
@@ -510,7 +522,7 @@ def test_run_with_spec_violation_increments_counter(tmp_path, monkeypatch):
     spec = _make_spec(drift_threshold=0.7)
     nodes = [_RwsNode()]
     agent, _ = _rws_make_agent(nodes)
-    with patch("ballast.core.trajectory.score_drift", return_value=(0.3, "VIOLATED", "bad")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_VIOLATED):
         asyncio.run(run_with_spec(agent, "task", spec))
     progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
     assert progress.total_violations == 1
@@ -522,6 +534,6 @@ def test_run_with_spec_no_poller_skips_injection(tmp_path, monkeypatch):
     spec = _make_spec()
     nodes = [_RwsNode()]
     agent, run = _rws_make_agent(nodes)
-    with patch("ballast.core.trajectory.score_drift", return_value=(1.0, "PROGRESSING", "")):
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
         asyncio.run(run_with_spec(agent, "task", spec))
     assert run.message_history == []

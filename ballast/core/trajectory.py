@@ -5,7 +5,7 @@ Public interface:
                       — 7-step orchestration loop; spec poll, drift score,
                         context window, checkpoint, correction inject.
     score_drift(node, full_window, spec)
-                      — Layer 1 cascade: returns (score, label, rationale).
+                      — Layer 1 cascade: returns NodeAssessment.
     TrajectoryChecker — single-node, fixed-spec drift scorer (simpler API).
     DriftResult       — scored assessment of one node (used by TrajectoryChecker).
     DriftDetected     — raised by TrajectoryChecker.check() when score < threshold.
@@ -424,8 +424,8 @@ def score_drift(
     node: Any,
     full_window: list,
     spec: SpecModel,
-) -> tuple[float, str, str]:
-    """Layer 1 cascade: score a node and return (score, label, rationale).
+) -> NodeAssessment:
+    """Layer 1 cascade: score a node and return a NodeAssessment.
 
     Step 1 — Heuristic gate (no LLM, ~0ms):
         irreversibility check (spec.irreversible_actions)
@@ -437,21 +437,36 @@ def score_drift(
         else          → STALLED      (Layer 2 stub — wired at Step 10)
 
     Returns:
-        (aggregate_score, label, rationale)
+        NodeAssessment with score, label, rationale, per-scorer breakdown, tool_name.
     """
     _, content, tool_info = _extract_node_info(node)
     tool_name = tool_info.get("tool_name", "")
 
     # ── Heuristic gate ────────────────────────────────────────────────────
     if tool_name and spec.irreversible_actions and tool_name in spec.irreversible_actions:
-        return 0.0, "VIOLATED_IRREVERSIBLE", f"irreversible tool: {tool_name}"
+        return NodeAssessment(
+            score=0.0, label="VIOLATED_IRREVERSIBLE",
+            rationale=f"irreversible tool: {tool_name}",
+            tool_score=0.0, constraint_score=1.0, intent_score=1.0,
+            tool_name=tool_name,
+        )
 
     tool_score = score_tool_compliance(node, spec)
     if tool_score == 0.0:
-        return 0.0, "VIOLATED", f"tool not in allowed_tools: {tool_name}"
+        return NodeAssessment(
+            score=0.0, label="VIOLATED",
+            rationale=f"tool not in allowed_tools: {tool_name}",
+            tool_score=0.0, constraint_score=1.0, intent_score=1.0,
+            tool_name=tool_name,
+        )
 
     if not content and not tool_name:
-        return 1.0, "PROGRESSING", "no scoreable content"
+        return NodeAssessment(
+            score=1.0, label="PROGRESSING",
+            rationale="no scoreable content",
+            tool_score=1.0, constraint_score=1.0, intent_score=1.0,
+            tool_name=tool_name,
+        )
 
     # ── LLM scorers ───────────────────────────────────────────────────────
     # Interim Layer 1: uses existing scorers until evaluator.py is built (Step 10).
@@ -468,11 +483,15 @@ def score_drift(
         # LAYER_2_STUB: passes as STALLED until evaluator.py is wired at Step 10.
         label = "STALLED"
 
-    rationale = (
-        f"intent={intent_score:.2f} constraint={constraint_score:.2f} "
-        f"tool={tool_score:.2f}"
+    return NodeAssessment(
+        score=round(aggregate, 4),
+        label=label,
+        rationale=f"intent={intent_score:.2f} constraint={constraint_score:.2f} tool={tool_score:.2f}",
+        tool_score=tool_score,
+        constraint_score=constraint_score,
+        intent_score=intent_score,
+        tool_name=tool_name,
     )
-    return round(aggregate, 4), label, rationale
 
 
 def _compact_node(
@@ -724,22 +743,21 @@ async def run_with_spec(
                     )
 
             # ── 2. Cascade drift score ──────────────────────────────────
-            score, label, rationale = score_drift(node, full_window, active_spec)
+            assessment = score_drift(node, full_window, active_spec)
 
             # ── 3. Environment probe — STUB ─────────────────────────────
             # TODO Step 9: replace with verify_node_claim from ballast.core.probe
-            # if label in ("PROGRESSING", "COMPLETE"):
-            #     verified, probe_note = await verify_node_claim(node, label, active_spec)
+            # if assessment.label in ("PROGRESSING", "COMPLETE"):
+            #     verified, probe_note = await verify_node_claim(node, assessment.label, active_spec)
             #     if not verified:
-            #         label, score = "VIOLATED", 0.0
-            #         rationale = f"probe failed: {probe_note}"
+            #         assessment.label, assessment.score = "VIOLATED", 0.0
+            #         assessment.rationale = f"probe failed: {probe_note}"
             verified = True
 
             # ── 4. Drift response ───────────────────────────────────────
             node_cost = getattr(node, "cost_usd", 0.0)
-            _, _, tool_info = _extract_node_info(node)
 
-            if label == "VIOLATED_IRREVERSIBLE":
+            if assessment.label == "VIOLATED_IRREVERSIBLE":
                 # TODO Step 7: replace with escalate() from ballast.core.escalation
                 # resolution = await escalate(node, active_spec, compact_history + full_window)
                 # agent_run.ctx.state.message_history.append(
@@ -750,17 +768,17 @@ async def run_with_spec(
                 logger.warning(
                     "irreversible_action_detected node=%d tool=%s spec_version=%s run_id=%s",
                     node_index,
-                    tool_info.get("tool_name", ""),
+                    assessment.tool_name,
                     active_spec.version_hash,
                     run_id,
                 )
 
-            elif score < active_spec.drift_threshold:
+            elif assessment.score < active_spec.drift_threshold:
                 # TODO Step 6: replace with build_correction() from ballast.core.guardrails
                 correction = (
                     f"[BALLAST CORRECTION] Drift at node {node_index} "
-                    f"(score={score:.2f}, label={label}). "
-                    f"Rationale: {rationale}. "
+                    f"(score={assessment.score:.2f}, label={assessment.label}). "
+                    f"Rationale: {assessment.rationale}. "
                     f"Re-align with intent: {active_spec.intent[:200]}"
                 )
                 agent_run.ctx.state.message_history.append(
@@ -769,10 +787,10 @@ async def run_with_spec(
                 # TODO Step 13: emit_drift_span(node, active_spec, score, label)
                 logger.warning(
                     "drift_detected node=%d score=%.3f label=%s spec_version=%s run_id=%s",
-                    node_index, score, label, active_spec.version_hash, run_id,
+                    node_index, assessment.score, assessment.label, active_spec.version_hash, run_id,
                 )
                 progress.total_drift_events += 1
-                if label == "VIOLATED":
+                if assessment.label == "VIOLATED":
                     progress.total_violations += 1
 
             # ── 5. Context window management ────────────────────────────
@@ -780,15 +798,15 @@ async def run_with_spec(
             if len(full_window) > active_spec.harness.context_window_size:
                 evicted = full_window.pop(0)
                 compact_history.append(
-                    _compact_node(evicted, score, label, node_cost, verified)
+                    _compact_node(evicted, assessment.score, assessment.label, node_cost, verified)
                 )
 
             # ── 6. Checkpoint ───────────────────────────────────────────
             progress.completed_node_summaries.append(NodeSummary(
                 index=node_index,
-                tool_name=tool_info.get("tool_name", ""),
-                label=label,
-                drift_score=score,
+                tool_name=assessment.tool_name,
+                label=assessment.label,
+                drift_score=assessment.score,
                 cost_usd=node_cost,
                 verified=verified,
                 spec_hash=active_spec.version_hash,   # active hash — NOT dispatch hash
@@ -796,7 +814,7 @@ async def run_with_spec(
             ))
             progress.total_cost_usd += node_cost
             progress.updated_at = datetime.now(timezone.utc).isoformat()
-            if label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
+            if assessment.label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
                 progress.last_clean_node_index = node_index
             if node_index % active_spec.harness.checkpoint_every_n_nodes == 0:
                 progress.write()
