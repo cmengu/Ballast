@@ -591,10 +591,7 @@ class TrajectoryChecker:
 
         self._step += 1
 
-        tool_score = score_tool_compliance(node, self.spec)
-        constraint_score = score_constraint_violation(node, self.spec)
-        intent_score = score_intent_alignment(node, self.spec)
-
+        tool_score, constraint_score, intent_score = _run_scorers(node, self.spec)
         aggregate = min(tool_score, constraint_score, intent_score)
 
         # Failing dimension: only when below drift_threshold (gate failed).
