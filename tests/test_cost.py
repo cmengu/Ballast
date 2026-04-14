@@ -88,6 +88,26 @@ def test_escalation_budget_exceeded_carries_agent_id():
     assert exc_info.value.agent_id == "ceo"
 
 
+def test_agent_guard_check_and_record_raises_before_committing():
+    """If check_and_record raises, _spent must be unchanged."""
+    g = AgentCostGuard("worker", agent_cap_usd=0.10, escalation_pool_usd=0.03)
+    g.record(0.10)  # fill cap
+    with pytest.raises(AgentCapExceeded):
+        g.check_and_record(0.001)
+    assert g.spent == pytest.approx(0.10)  # record was never called
+
+
+def test_run_guard_check_and_record_raises_before_committing():
+    """If RunCostGuard.check_and_record raises, total_spent must be unchanged."""
+    rg = RunCostGuard(hard_cap_usd=1.0)
+    rg.register("worker", cap=10.0, escalation_pool=0.0)
+    rg.record("worker", 1.0)  # fill hard cap
+    before = rg.total_spent
+    with pytest.raises(HardCapExceeded):
+        rg.check_and_record("worker", 0.001)
+    assert rg.total_spent == pytest.approx(before)  # record was never called
+
+
 # ---------------------------------------------------------------------------
 # RunCostGuard
 # ---------------------------------------------------------------------------

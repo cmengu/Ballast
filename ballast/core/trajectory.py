@@ -818,8 +818,7 @@ async def run_with_spec(
 
             # ── 6b. Cost enforcement ────────────────────────────────────
             if cost_guard is not None:
-                cost_guard.check(agent_id, node_cost)
-                cost_guard.record(agent_id, node_cost)
+                cost_guard.check_and_record(agent_id, node_cost)
 
             # ── 7. OTel emit — STUB ─────────────────────────────────────
             # TODO Step 13: emit_drift_span(node, active_spec, score, label)

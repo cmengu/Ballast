@@ -118,6 +118,15 @@ class AgentCostGuard:
         else:
             self._spent += actual
 
+    def check_and_record(self, actual: float, is_escalation: bool = False) -> None:
+        """Raise if actual would exceed this agent's cap, then commit atomically.
+
+        Preferred over separate check() + record() calls. If check() raises,
+        record() is never called — state is never partially mutated.
+        """
+        self.check(actual, is_escalation)
+        self.record(actual, is_escalation)
+
     @property
     def spent(self) -> float:
         """Total non-escalation spend recorded so far."""
@@ -173,6 +182,32 @@ class RunCostGuard:
         """Commit actual spend to global total and per-agent guard."""
         self._total += actual
         self._agents[agent_id].record(actual, is_escalation)
+
+    def check_and_record(
+        self, agent_id: str, actual: float, is_escalation: bool = False
+    ) -> None:
+        """Raise if actual would exceed any cap, then commit atomically.
+
+        Preferred call-site for run_with_spec. Prevents partial mutation if
+        a future await is inserted between check and record.
+        Checks global hard cap first, then per-agent cap, then commits both.
+        """
+        self.check(agent_id, actual, is_escalation)
+        self.record(agent_id, actual, is_escalation)
+
+    def seed_prior_spend(self, prior_spend: float) -> None:
+        """Seed global total from a prior run segment (used by run_with_spec on resume).
+
+        Must be called before any check_and_record() call on this guard.
+        Raises ValueError if the guard already has recorded spend — double-seeding
+        would corrupt budget tracking.
+        """
+        if self._total != 0.0:
+            raise ValueError(
+                f"seed_prior_spend: guard already has _total={self._total:.6f}; "
+                "cannot seed a guard that has already recorded spend"
+            )
+        self._total = prior_spend
 
     @property
     def total_spent(self) -> float:
