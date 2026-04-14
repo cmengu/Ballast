@@ -108,6 +108,57 @@ def test_run_guard_check_and_record_raises_before_committing():
     assert rg.total_spent == pytest.approx(before)  # record was never called
 
 
+def test_run_guard_seed_prior_spend_sets_total():
+    rg = RunCostGuard(hard_cap_usd=1.0)
+    rg.seed_prior_spend(0.50)
+    assert rg.total_spent == pytest.approx(0.50)
+
+
+def test_run_guard_seed_prior_spend_raises_if_guard_has_spend():
+    rg = RunCostGuard(hard_cap_usd=1.0)
+    rg.register("worker", cap=2.0, escalation_pool=0.0)
+    rg.record("worker", 0.01)
+    with pytest.raises(ValueError, match="already has"):
+        rg.seed_prior_spend(0.50)
+
+
+def test_run_with_spec_seeds_cost_guard_on_resume(tmp_path, monkeypatch):
+    """On resume, cost_guard._total is seeded from progress.total_cost_usd.
+
+    Without seeding: node costs 0.04, hard_cap=0.10 → no raise (0.04 < 0.10).
+    With seeding:    prior_spend=0.07 + 0.04 = 0.11 > 0.10 → HardCapExceeded.
+    """
+    monkeypatch.chdir(tmp_path)
+    from ballast.core.checkpoint import BallastProgress
+    from datetime import datetime, timezone
+
+    spec = _make_spec()
+
+    # Write a checkpoint from a "prior run segment" that spent $0.07
+    prior = BallastProgress(
+        spec_hash=spec.version_hash,
+        active_spec_hash=spec.version_hash,
+        spec_intent=spec.intent,
+        run_id="prior",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        total_cost_usd=0.07,
+        last_clean_node_index=0,
+        remaining_success_criteria=list(spec.success_criteria),
+    )
+    prior.write(str(tmp_path / "ballast-progress.json"))
+
+    # hard_cap=0.10; prior spend seeded as 0.07; node costs 0.04 → 0.11 > 0.10
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent(nodes, node_costs=[0.04])
+    rg = RunCostGuard(hard_cap_usd=0.10)
+    rg.register("default", cap=1.0, escalation_pool=0.0)
+
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
+        with pytest.raises(HardCapExceeded):
+            asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg))
+
+
 # ---------------------------------------------------------------------------
 # RunCostGuard
 # ---------------------------------------------------------------------------

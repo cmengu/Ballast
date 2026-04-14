@@ -696,6 +696,12 @@ async def run_with_spec(
     ):
         task = f"{progress.resume_context()}\n\nOriginal task: {task}"
         node_offset = progress.last_clean_node_index + 1
+        if cost_guard is not None:
+            cost_guard.seed_prior_spend(progress.total_cost_usd)
+            logger.info(
+                "cost_guard seeded prior_spend=%.6f from checkpoint run_id=%s",
+                progress.total_cost_usd, progress.run_id,
+            )
         logger.info(
             "run_with_spec resuming run_id=%s from node=%d spec_version=%s",
             progress.run_id, node_offset, spec.version_hash,
@@ -715,6 +721,7 @@ async def run_with_spec(
     full_window: list = []
     compact_history: list[dict] = []
     node_index = node_offset
+    _cost_usd_warned = False
 
     async with agent.iter(task) as agent_run:
         async for node in agent_run:
