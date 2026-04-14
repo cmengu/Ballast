@@ -8,6 +8,7 @@ Sections:
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
@@ -159,6 +160,32 @@ def test_run_with_spec_seeds_cost_guard_on_resume(tmp_path, monkeypatch):
             asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg))
 
 
+def test_run_with_spec_warns_once_when_cost_usd_missing(tmp_path, monkeypatch, caplog):
+    """Warning fires exactly once (not per-node) when cost_usd is absent and guard active."""
+    monkeypatch.chdir(tmp_path)
+    spec = _make_spec()
+    nodes = [_RwsNode(), _RwsNode()]
+
+    run = _NoCostAgentRun(nodes)
+    agent = MagicMock()
+
+    @asynccontextmanager
+    async def _iter(task):
+        yield run
+
+    agent.iter = _iter
+
+    rg = RunCostGuard(hard_cap_usd=10.0)
+    rg.register("worker", cap=1.0, escalation_pool=0.0)
+
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
+        with caplog.at_level(logging.WARNING, logger="ballast.core.trajectory"):
+            asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg, agent_id="worker"))
+
+    warnings = [r for r in caplog.records if "cost_usd_missing" in r.message]
+    assert len(warnings) == 1
+
+
 # ---------------------------------------------------------------------------
 # RunCostGuard
 # ---------------------------------------------------------------------------
@@ -242,8 +269,7 @@ class _RwsNode:
 class _RwsAgentRun:
     """Mock AgentRun for cost integration tests.
 
-    _gen sets node.cost_usd before yielding each node so that
-    getattr(node, 'cost_usd', 0.0) in trajectory.py returns the test value.
+    _gen sets node.cost_usd before yielding each node so trajectory reads real spend.
     """
 
     def __init__(self, nodes, output="done", node_costs=None):
@@ -283,6 +309,33 @@ def _rws_make_agent(nodes, output="done", node_costs=None):
 
     agent.iter = _iter
     return agent, run
+
+
+class _NoCostAgentRun:
+    """AgentRun that yields nodes WITHOUT cost_usd — simulates pydantic-ai not exposing it."""
+
+    def __init__(self, nodes, output="done"):
+        self._nodes = nodes
+        self._output = output
+        state = MagicMock()
+        state.message_history = []
+        ctx = MagicMock()
+        ctx.state = state
+        self._ctx = ctx
+
+    @property
+    def ctx(self):
+        return self._ctx
+
+    async def get_output(self):
+        return self._output
+
+    def __aiter__(self):
+        return self._gen()
+
+    async def _gen(self):
+        for node in self._nodes:
+            yield node
 
 
 def _make_spec():

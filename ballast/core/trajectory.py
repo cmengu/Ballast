@@ -759,7 +759,18 @@ async def run_with_spec(
             verified = True
 
             # ── 4. Drift response ───────────────────────────────────────
-            node_cost = getattr(node, "cost_usd", 0.0)
+            if hasattr(node, "cost_usd"):
+                node_cost = float(node.cost_usd)
+            else:
+                node_cost = 0.0
+                if cost_guard is not None and not _cost_usd_warned:
+                    logger.warning(
+                        "cost_usd_missing node_type=%s node_index=%d run_id=%s"
+                        " — cost guard is active but node exposes no cost_usd;"
+                        " cap enforcement will not fire",
+                        type(node).__name__, node_index, run_id,
+                    )
+                    _cost_usd_warned = True
 
             if assessment.label == "VIOLATED_IRREVERSIBLE":
                 # TODO Step 7: replace with escalate() from ballast.core.escalation
