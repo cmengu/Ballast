@@ -100,21 +100,32 @@ def test_run_guard_allows_under_all_caps():
 
 def test_run_guard_raises_hard_cap_before_agent_cap():
     """HardCapExceeded fires even when per-agent cap would allow it."""
-    rg = RunCostGuard()
-    rg.register("worker", cap=HARD_CAP_USD + 1.0, escalation_pool=0.0)
-    rg._total = HARD_CAP_USD - 0.001
+    rg = RunCostGuard(hard_cap_usd=1.0)
+    rg.register("worker", cap=10.0, escalation_pool=0.0)
+    rg.record("worker", 0.999)
     with pytest.raises(HardCapExceeded):
         rg.check("worker", 0.002)
 
 
 def test_run_guard_hard_cap_exceeded_carries_total_and_estimated():
-    rg = RunCostGuard()
-    rg.register("worker", cap=500.0, escalation_pool=0.0)
-    rg._total = HARD_CAP_USD - 0.001
+    rg = RunCostGuard(hard_cap_usd=1.0)
+    rg.register("worker", cap=10.0, escalation_pool=0.0)
+    rg.record("worker", 0.999)
     with pytest.raises(HardCapExceeded) as exc_info:
         rg.check("worker", 0.002)
-    assert exc_info.value.total == pytest.approx(HARD_CAP_USD - 0.001)
+    assert exc_info.value.total == pytest.approx(0.999)
     assert exc_info.value.estimated == pytest.approx(0.002)
+    assert exc_info.value.hard_cap == pytest.approx(1.0)
+
+
+def test_run_guard_custom_hard_cap_respected():
+    """RunCostGuard(hard_cap_usd=X) enforces X, not the module-level default."""
+    rg = RunCostGuard(hard_cap_usd=0.50)
+    rg.register("worker", cap=10.0, escalation_pool=0.0)
+    rg.record("worker", 0.40)
+    with pytest.raises(HardCapExceeded):
+        rg.check("worker", 0.20)   # 0.40 + 0.20 = 0.60 > 0.50
+    rg.check("worker", 0.09)       # 0.40 + 0.09 = 0.49 < 0.50 — must not raise
 
 
 def test_run_guard_record_advances_global_total():
@@ -238,12 +249,12 @@ def test_run_with_spec_hard_cap_stops_run(tmp_path, monkeypatch):
     """HardCapExceeded propagates when global hard cap is hit."""
     monkeypatch.chdir(tmp_path)
     spec = _make_spec()
-    # _total starts at 299.5; node costs 1.0 → 299.5 + 1.0 = 300.5 > 300 → raises
+    # hard_cap=1.0; pre-record 0.5; node costs 0.6 → 1.1 > 1.0 → raises
     nodes = [_RwsNode()]
-    agent, _ = _rws_make_agent(nodes, node_costs=[1.0])
-    rg = RunCostGuard()
+    agent, _ = _rws_make_agent(nodes, node_costs=[0.6])
+    rg = RunCostGuard(hard_cap_usd=1.0)
     rg.register("worker", cap=500.0, escalation_pool=0.0)
-    rg._total = HARD_CAP_USD - 0.5
+    rg.record("worker", 0.5)
     with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         with pytest.raises(HardCapExceeded):
             asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg, agent_id="worker"))

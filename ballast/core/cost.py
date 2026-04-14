@@ -9,11 +9,10 @@ Public interface:
     RunCostGuard              — global enforcer; owns all AgentCostGuards for a run
 
 Usage:
-    guard = RunCostGuard()
+    guard = RunCostGuard(hard_cap_usd=300.0)   # defaults to HARD_CAP_USD
     guard.register("worker", cap=0.10, escalation_pool=0.03)
     # at each node boundary in run_with_spec:
-    guard.check("worker", node_cost)   # raises if cap would be exceeded
-    guard.record("worker", node_cost)  # commits spend only if check passed
+    guard.check_and_record("worker", node_cost)   # atomic: raises before committing
 
 Invariant (projet-overview.md invariant 10):
     cost caps are enforced in code from day one.
@@ -61,13 +60,14 @@ class EscalationBudgetExceeded(Exception):
 class HardCapExceeded(Exception):
     """Raised when the global run hard cap would be exceeded."""
 
-    def __init__(self, total: float, estimated: float) -> None:
+    def __init__(self, total: float, estimated: float, hard_cap: float = HARD_CAP_USD) -> None:
         self.total = total
         self.estimated = estimated
+        self.hard_cap = hard_cap
         super().__init__(
             f"hard run cap exceeded: "
             f"total={total:.6f} + estimated={estimated:.6f} > "
-            f"hard_cap={HARD_CAP_USD:.6f}"
+            f"hard_cap={hard_cap:.6f}"
         )
 
 
@@ -137,13 +137,14 @@ class RunCostGuard:
     """Global cost enforcer for a single run. Owns all AgentCostGuards.
 
     Call register() for every agent_id before passing this guard to run_with_spec.
-    check() enforces the global HARD_CAP_USD first, then the per-agent cap.
+    check() enforces the global hard_cap_usd first, then the per-agent cap.
     record() advances both the global total and the per-agent total.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, hard_cap_usd: float = HARD_CAP_USD) -> None:
         self._agents: dict[str, AgentCostGuard] = {}
         self._total: float = 0.0
+        self.hard_cap_usd: float = hard_cap_usd
 
     def register(self, agent_id: str, cap: float, escalation_pool: float) -> None:
         """Register an agent with its spend cap and escalation pool.
@@ -157,13 +158,13 @@ class RunCostGuard:
     ) -> None:
         """Raise if recording `estimated` would exceed any cap.
 
-        Order: global HARD_CAP_USD checked first → per-agent cap second.
+        Order: global hard_cap_usd checked first → per-agent cap second.
         HardCapExceeded fires even if the agent-level cap would allow it.
         Raises KeyError if agent_id was not registered via register().
         Does NOT modify state.
         """
-        if self._total + estimated > HARD_CAP_USD:
-            raise HardCapExceeded(self._total, estimated)
+        if self._total + estimated > self.hard_cap_usd:
+            raise HardCapExceeded(self._total, estimated, self.hard_cap_usd)
         self._agents[agent_id].check(estimated, is_escalation)
 
     def record(
@@ -182,8 +183,8 @@ class RunCostGuard:
         """Return a spend summary dict suitable for logging or the dashboard."""
         return {
             "total_spent": round(self._total, 6),
-            "hard_cap": HARD_CAP_USD,
-            "remaining": round(HARD_CAP_USD - self._total, 6),
+            "hard_cap": self.hard_cap_usd,
+            "remaining": round(self.hard_cap_usd - self._total, 6),
             "agents": {
                 aid: {
                     "spent": round(g.spent, 6),
