@@ -33,6 +33,8 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
+from ballast.core.escalation import EscalationFailed, escalate
+from ballast.core.guardrails import HardInterrupt, build_correction, can_resume
 from ballast.core.spec import SpecModel, is_locked
 from ballast.core.sync import SpecPoller
 
@@ -689,11 +691,7 @@ async def run_with_spec(
 
     # Resume from checkpoint if available
     progress = BallastProgress.read()
-    if (
-        progress
-        and progress.spec_hash == spec.version_hash
-        and not progress.is_complete
-    ):
+    if can_resume(progress, spec):
         task = f"{progress.resume_context()}\n\nOriginal task: {task}"
         node_offset = progress.last_clean_node_index + 1
         if cost_guard is not None:
@@ -773,11 +771,20 @@ async def run_with_spec(
                     _cost_usd_warned = True
 
             if assessment.label == "VIOLATED_IRREVERSIBLE":
-                # TODO Step 7: replace with escalate() from ballast.core.escalation
-                # resolution = await escalate(node, active_spec, compact_history + full_window)
-                # agent_run.ctx.state.message_history.append(
-                #     ModelRequest(parts=[UserPromptPart(content=resolution)])
-                # )
+                try:
+                    resolution = await escalate(
+                        assessment,
+                        active_spec,
+                        compact_history + full_window,
+                        run_id=run_id,
+                        node_index=node_index,
+                    )
+                    agent_run.ctx.state.message_history.append(
+                        ModelRequest(parts=[UserPromptPart(content=resolution)])
+                    )
+                except EscalationFailed:
+                    progress.write()
+                    raise HardInterrupt(assessment, active_spec, node_index)
                 progress.total_violations += 1
                 progress.last_escalation = datetime.now(timezone.utc).isoformat()
                 logger.warning(
@@ -789,13 +796,7 @@ async def run_with_spec(
                 )
 
             elif assessment.score < active_spec.drift_threshold:
-                # TODO Step 6: replace with build_correction() from ballast.core.guardrails
-                correction = (
-                    f"[BALLAST CORRECTION] Drift at node {node_index} "
-                    f"(score={assessment.score:.2f}, label={assessment.label}). "
-                    f"Rationale: {assessment.rationale}. "
-                    f"Re-align with intent: {active_spec.intent[:200]}"
-                )
+                correction = build_correction(assessment, active_spec, node_index)
                 agent_run.ctx.state.message_history.append(
                     ModelRequest(parts=[UserPromptPart(content=correction)])
                 )
