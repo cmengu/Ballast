@@ -35,6 +35,7 @@ from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
 from ballast.core.guardrails import HardInterrupt, build_correction, can_resume
+from ballast.core.probe import verify_node_claim
 from ballast.core.spec import SpecModel, is_locked
 from ballast.core.sync import SpecPoller
 
@@ -660,7 +661,7 @@ async def run_with_spec(
     At every node boundary:
         1. Poll M5 for spec update → inject SpecDelta if version changed
         2. Cascade drift score (Layer 1; Layer 2 stubbed until Step 10)
-        3. Environment probe (stubbed until Step 9)
+        3. Environment probe (verify_node_claim when PROGRESSING)
         4. Drift response — inject correction or log escalation
         5. Context window management (full_window + compact_history)
         6. Checkpoint write every checkpoint_every_n_nodes nodes
@@ -747,14 +748,20 @@ async def run_with_spec(
             # ── 2. Cascade drift score ──────────────────────────────────
             assessment = score_drift(node, full_window, active_spec)
 
-            # ── 3. Environment probe — STUB ─────────────────────────────
-            # TODO Step 9: replace with verify_node_claim from ballast.core.probe
-            # if assessment.label in ("PROGRESSING", "COMPLETE"):
-            #     verified, probe_note = await verify_node_claim(node, assessment.label, active_spec)
-            #     if not verified:
-            #         assessment.label, assessment.score = "VIOLATED", 0.0
-            #         assessment.rationale = f"probe failed: {probe_note}"
+            # ── 3. Environment probe ────────────────────────────────────
             verified = True
+            if assessment.label == "PROGRESSING":
+                verified, probe_note = await verify_node_claim(
+                    node, assessment.label, active_spec,
+                )
+                if not verified:
+                    assessment.label = "VIOLATED"
+                    assessment.score = 0.0
+                    assessment.rationale = f"probe failed: {probe_note}"
+                    logger.warning(
+                        "probe_failed node=%d tool=%s note=%s run_id=%s",
+                        node_index, assessment.tool_name, probe_note, run_id,
+                    )
 
             # ── 4. Drift response ───────────────────────────────────────
             if hasattr(node, "cost_usd"):
