@@ -35,6 +35,7 @@ from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
 from ballast.core.guardrails import HardInterrupt, build_correction, can_resume
+from ballast.core.evaluator import evaluate_node
 from ballast.core.probe import verify_node_claim
 from ballast.core.spec import SpecModel, is_locked
 from ballast.core.sync import SpecPoller
@@ -434,10 +435,10 @@ def score_drift(
         irreversibility check (spec.irreversible_actions)
         tool compliance check (spec.allowed_tools)
 
-    Step 2 — LLM scorers (interim Layer 1; replaced by evaluate_node at Step 10):
+    Step 2 — LLM scorers (Layer 1) + Layer 2 when ambiguous:
         score >= 0.85 → PROGRESSING  (skip Layer 2)
         score <= 0.25 → VIOLATED     (skip Layer 2)
-        else          → STALLED      (Layer 2 stub — wired at Step 10)
+        else          → evaluate_node if spec.harness.enable_layer2_judge else STALLED
 
     Returns:
         NodeAssessment with score, label, rationale, per-scorer breakdown, tool_name.
@@ -471,25 +472,34 @@ def score_drift(
             tool_name=tool_name,
         )
 
-    # ── LLM scorers ───────────────────────────────────────────────────────
-    # Interim Layer 1: uses existing scorers until evaluator.py is built (Step 10).
+    # ── LLM scorers (Layer 1) ─────────────────────────────────────────────
     constraint_score = score_constraint_violation(node, spec)
     intent_score = score_intent_alignment(node, spec)
     aggregate = min(tool_score, constraint_score, intent_score)
 
-    # ── Label assignment ──────────────────────────────────────────────────
+    # ── Label assignment (Layer 2 when ambiguous and harness allows) ───────
+    eval_note = ""
     if aggregate >= 0.85:
         label = "PROGRESSING"
     elif aggregate <= 0.25:
         label = "VIOLATED"
+    elif spec.harness.enable_layer2_judge:
+        label, eval_note = evaluate_node(
+            node, full_window, spec,
+            tool_score=tool_score,
+            constraint_score=constraint_score,
+            intent_score=intent_score,
+        )
     else:
-        # LAYER_2_STUB: passes as STALLED until evaluator.py is wired at Step 10.
         label = "STALLED"
 
     return NodeAssessment(
         score=round(aggregate, 4),
         label=label,
-        rationale=f"intent={intent_score:.2f} constraint={constraint_score:.2f} tool={tool_score:.2f}",
+        rationale=(
+            f"intent={intent_score:.2f} constraint={constraint_score:.2f} tool={tool_score:.2f}"
+            + (f"; layer2={eval_note}" if eval_note else "")
+        ),
         tool_score=tool_score,
         constraint_score=constraint_score,
         intent_score=intent_score,
@@ -507,7 +517,7 @@ def _compact_node(
     """Compact an evicted node to a summary dict for compact_history.
 
     compact_history is the portion of the context window beyond full_window.
-    Passed as context to the Layer 2 evaluator (Step 10) and escalation (Step 7).
+    Passed as context to the Layer 2 evaluator and escalation (Step 7).
     """
     _, content, tool_info = _extract_node_info(node)
     return {
@@ -660,7 +670,7 @@ async def run_with_spec(
 
     At every node boundary:
         1. Poll M5 for spec update → inject SpecDelta if version changed
-        2. Cascade drift score (Layer 1; Layer 2 stubbed until Step 10)
+        2. Cascade drift score (Layer 1; Layer 2 when ambiguous if harness.enable_layer2_judge)
         3. Environment probe (verify_node_claim when PROGRESSING)
         4. Drift response — inject correction or log escalation
         5. Context window management (full_window + compact_history)

@@ -371,8 +371,37 @@ def test_score_drift_clean_node_returns_progressing():
     assert "intent=" in a.rationale
 
 
-def test_score_drift_borderline_returns_stalled():
+def test_score_drift_borderline_calls_evaluator():
+    """Borderline nodes (0.25 < aggregate < 0.85) are resolved by the Layer 2 evaluator."""
     spec = _make_spec_with_irreversible()
+    mock_client = MagicMock()
+    block = MagicMock()
+    block.type = "tool_use"
+    block.input = {"label": "PROGRESSING", "rationale": "looks fine"}
+    mock_response = MagicMock()
+    mock_response.content = [block]
+    mock_client.messages.create.return_value = mock_response
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.6), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.6), \
+         patch("ballast.core.evaluator._get_evaluator_client", return_value=mock_client):
+        a = score_drift(FakeTextNode("unclear"), [], spec)
+    assert a.label == "PROGRESSING"
+    assert 0.25 < a.score < 0.85
+    assert "layer2=" in a.rationale
+
+
+def test_score_drift_borderline_returns_stalled_when_layer2_disabled():
+    """When enable_layer2_judge=False (opus harness), ambiguous nodes stay STALLED."""
+    from ballast.core.spec import HarnessProfile
+
+    spec = lock(SpecModel(
+        intent="test",
+        success_criteria=["done"],
+        irreversible_actions=["send_email"],
+        allowed_tools=["read_file"],
+        drift_threshold=0.4,
+        harness=HarnessProfile(enable_layer2_judge=False),
+    ))
     with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.6), \
          patch("ballast.core.trajectory.score_intent_alignment", return_value=0.6):
         a = score_drift(FakeTextNode("unclear"), [], spec)
