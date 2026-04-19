@@ -14,6 +14,7 @@ dependencies = [
     "langchain-anthropic",
     "anthropic>=0.20",
     "filelock",
+    "opentelemetry-api>=1.30",
     "pydantic>=2.0",
     "pydantic-ai>=0.0.13,<1.0",
     "python-dotenv",
