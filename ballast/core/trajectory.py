@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+from ballast.adapters.otel import emit_drift_span
 from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
@@ -675,7 +676,7 @@ async def run_with_spec(
         4. Drift response — inject correction or log escalation
         5. Context window management (full_window + compact_history)
         6. Checkpoint write every checkpoint_every_n_nodes nodes
-        7. OTel emit (stubbed until Step 13)
+        7. OTel emit (emit_drift_span when label != PROGRESSING)
 
     Args:
         agent:   pydantic-ai Agent instance.
@@ -817,7 +818,6 @@ async def run_with_spec(
                 agent_run.ctx.state.message_history.append(
                     ModelRequest(parts=[UserPromptPart(content=correction)])
                 )
-                # TODO Step 13: emit_drift_span(node, active_spec, score, label)
                 logger.warning(
                     "drift_detected node=%d score=%.3f label=%s spec_version=%s run_id=%s",
                     node_index, assessment.score, assessment.label, active_spec.version_hash, run_id,
@@ -856,10 +856,9 @@ async def run_with_spec(
             if cost_guard is not None:
                 cost_guard.check_and_record(agent_id, node_cost)
 
-            # ── 7. OTel emit — STUB ─────────────────────────────────────
-            # TODO Step 13: emit_drift_span(node, active_spec, score, label)
-            # if label in ("VIOLATED", "VIOLATED_IRREVERSIBLE", "STALLED"):
-            #     emit_drift_span(node, active_spec, score, label)
+            # ── 7. OTel emit ─────────────────────────────────────────────
+            if assessment.label != "PROGRESSING":
+                emit_drift_span(assessment, active_spec, node_index, run_id, node_cost)
 
             node_index += 1
 
