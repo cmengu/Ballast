@@ -4,7 +4,7 @@ Public interface:
     run_with_spec(agent, task, spec, poller=None, cost_guard=None, agent_id="default")
                       — 7-step orchestration loop; spec poll, drift score,
                         context window, checkpoint, correction inject.
-    score_drift(node, full_window, spec)
+    score_drift(node, full_window, spec, compact_history=None)
                       — Layer 1 cascade: returns NodeAssessment.
     TrajectoryChecker — single-node, fixed-spec drift scorer (simpler API).
     DriftResult       — scored assessment of one node (used by TrajectoryChecker).
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
@@ -429,6 +429,7 @@ def score_drift(
     node: Any,
     full_window: list,
     spec: SpecModel,
+    compact_history: list | None = None,
 ) -> NodeAssessment:
     """Layer 1 cascade: score a node and return a NodeAssessment.
 
@@ -440,6 +441,11 @@ def score_drift(
         score >= 0.85 → PROGRESSING  (skip Layer 2)
         score <= 0.25 → VIOLATED     (skip Layer 2)
         else          → evaluate_node if spec.harness.enable_layer2_judge else STALLED
+
+    Args:
+        compact_history: Optional list of compact dicts from prior evicted nodes.
+            When provided (e.g. from run_with_spec), Layer 2 sees full sliding-window
+            context, not only dict-shaped entries in full_window.
 
     Returns:
         NodeAssessment with score, label, rationale, per-scorer breakdown, tool_name.
@@ -485,8 +491,9 @@ def score_drift(
     elif aggregate <= 0.25:
         label = "VIOLATED"
     elif spec.harness.enable_layer2_judge:
+        layer2_ctx = _layer2_evaluator_context(compact_history, full_window)
         label, eval_note = evaluate_node(
-            node, full_window, spec,
+            node, layer2_ctx, spec,
             tool_score=tool_score,
             constraint_score=constraint_score,
             intent_score=intent_score,
@@ -529,6 +536,25 @@ def _compact_node(
         "verified": verified,
         "summary": content[:200],
     }
+
+
+def _layer2_evaluator_context(compact_history: list | None, full_window: list) -> list[dict]:
+    """Build dict summaries for Layer 2: evicted nodes plus raw nodes still in full_window.
+
+    evaluate_node() only consumes dict rows (tool_name, label, score, …). compact_history
+    already holds dicts from _compact_node; full_window still holds raw pydantic-ai nodes,
+    which are compacted on the fly with neutral placeholders for score/label/cost.
+    """
+    out: list[dict] = []
+    for n in compact_history or []:
+        if isinstance(n, dict):
+            out.append(n)
+    for n in full_window:
+        if isinstance(n, dict):
+            out.append(n)
+        else:
+            out.append(_compact_node(n, 1.0, "PROGRESSING", 0.0, True))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -634,8 +660,8 @@ class TrajectoryChecker:
             threshold=self.spec.drift_threshold,
         )
 
-        # OTel placeholder: structured kwargs map 1:1 to span.set_attribute()
-        # Week 3 upgrade: replace with emit_drift_span(result) from adapters/otel.py
+        # Structured debug only — OTel drift spans are emitted from run_with_spec()
+        # (TrajectoryChecker is a lightweight per-node API without checkpoint context).
         logger.debug(
             "drift_check step=%d score=%.3f intent=%.3f tool=%.3f "
             "constraint=%.3f failing=%r spec_version=%s node_type=%s",
@@ -757,7 +783,7 @@ async def run_with_spec(
                     )
 
             # ── 2. Cascade drift score ──────────────────────────────────
-            assessment = score_drift(node, full_window, active_spec)
+            assessment = score_drift(node, full_window, active_spec, compact_history)
 
             # ── 3. Environment probe ────────────────────────────────────
             verified = True
@@ -766,9 +792,12 @@ async def run_with_spec(
                     node, assessment.label, active_spec,
                 )
                 if not verified:
-                    assessment.label = "VIOLATED"
-                    assessment.score = 0.0
-                    assessment.rationale = f"probe failed: {probe_note}"
+                    assessment = replace(
+                        assessment,
+                        label="VIOLATED",
+                        score=0.0,
+                        rationale=f"probe failed: {probe_note}",
+                    )
                     logger.warning(
                         "probe_failed node=%d tool=%s note=%s run_id=%s",
                         node_index, assessment.tool_name, probe_note, run_id,

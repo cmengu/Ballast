@@ -20,11 +20,10 @@ from typing import Any
 
 from pydantic_ai import Agent
 
+from ballast.core.constants import HAIKU_MODEL
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
-
-_HAIKU = "claude-haiku-4-5-20251001"
 
 _PROBE_SYSTEM = (
     "You are a constraint auditor for Ballast, an AI agent guardrail system. "
@@ -48,7 +47,7 @@ _probe_agent: "Agent | None" = None
 def _get_probe_agent() -> Agent:
     global _probe_agent
     if _probe_agent is None:
-        _probe_agent = Agent(model=_HAIKU, system_prompt=_PROBE_SYSTEM)
+        _probe_agent = Agent(model=HAIKU_MODEL, system_prompt=_PROBE_SYSTEM)
     return _probe_agent
 
 

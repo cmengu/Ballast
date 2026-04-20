@@ -390,6 +390,37 @@ def test_score_drift_borderline_calls_evaluator():
     assert "layer2=" in a.rationale
 
 
+def test_score_drift_layer2_receives_merged_compact_and_raw_context():
+    """Layer 2 sees compact_history dicts plus _compact_node summaries for raw full_window."""
+    spec = _make_spec_with_irreversible()
+    compact = [
+        {
+            "tool_name": "read_file",
+            "label": "PROGRESSING",
+            "score": 0.9,
+            "cost_usd": 0.0,
+            "verified": True,
+            "summary": "opened doc",
+        }
+    ]
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.6), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.6), \
+         patch("ballast.core.trajectory.evaluate_node") as mock_eval:
+        mock_eval.return_value = ("PROGRESSING", "ok")
+        score_drift(
+            FakeTextNode("unclear"),
+            [FakeTextNode("prior step output")],
+            spec,
+            compact_history=compact,
+        )
+    mock_eval.assert_called_once()
+    ctx = mock_eval.call_args[0][1]
+    assert len(ctx) == 2
+    assert ctx[0]["tool_name"] == "read_file"
+    assert ctx[0]["summary"] == "opened doc"
+    assert "prior step output" in ctx[1]["summary"]
+
+
 def test_score_drift_borderline_returns_stalled_when_layer2_disabled():
     """When enable_layer2_judge=False (opus harness), ambiguous nodes stay STALLED."""
     from ballast.core.spec import HarnessProfile

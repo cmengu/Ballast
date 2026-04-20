@@ -4,6 +4,7 @@ Public interface:
     evaluate_node(node, full_window, spec, *, tool_score, constraint_score, intent_score)
         -> tuple[str, str]  (label: "PROGRESSING"|"VIOLATED"|"STALLED", rationale: str)
         — Called by score_drift() for nodes in the ambiguous zone (0.25 < aggregate < 0.85).
+          full_window is a list of compact dicts (see _layer2_evaluator_context in trajectory).
           Returns ("STALLED", "evaluator_error: ...") on any exception (fail-open).
     EvaluatorPacket
         — Typed input envelope passed to _call_evaluator().
@@ -22,11 +23,10 @@ from typing import Any
 
 import anthropic
 
+from ballast.core.constants import HAIKU_MODEL
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
-
-_EVAL_MODEL = "claude-haiku-4-5-20251001"
 
 _EVALUATOR_SYSTEM = (
     "You are a Layer 2 evaluator for Ballast, an AI agent guardrail system. "
@@ -83,7 +83,7 @@ class EvaluatorPacket:
 
     Constructed once in evaluate_node(); treated as read-only by _call_evaluator().
     tool_args is JSON-serialised str for prompt safety (avoids nested dict formatting).
-    context_summary is a list of compact dicts from full_window (may be empty).
+    context_summary is a list of compact dicts from the Layer 2 context window (may be empty).
     """
 
     content: str
@@ -142,7 +142,7 @@ def _call_evaluator(
     )
     try:
         response = client.messages.create(
-            model=_EVAL_MODEL,
+            model=HAIKU_MODEL,
             max_tokens=300,
             system=_EVALUATOR_SYSTEM,
             tools=[_EVALUATOR_TOOL],
@@ -189,7 +189,9 @@ def evaluate_node(
 
     Args:
         node:             Raw pydantic-ai Agent.iter node.
-        full_window:      Recent node context (list of raw nodes — may be empty).
+        full_window:      Prior context for the evaluator: list of compact dicts
+                          (from compact_history and synthesized rows for raw nodes
+                          in the sliding window). Dict-only; see score_drift().
         spec:             Active locked SpecModel.
         tool_score:       Pre-computed Layer 1 tool compliance score [0, 1].
         constraint_score: Pre-computed Layer 1 constraint violation score [0, 1].

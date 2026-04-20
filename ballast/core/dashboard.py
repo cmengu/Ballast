@@ -93,9 +93,6 @@ class BallastDashboard(App):
         ("r", "refresh", "Force refresh"),
     ]
 
-    # Track the last-seen updated_at to avoid unnecessary renders.
-    _last_updated_at: str = ""
-
     def __init__(
         self,
         path: str = "ballast-progress.json",
@@ -105,6 +102,8 @@ class BallastDashboard(App):
         super().__init__(**kwargs)
         self._path = path
         self._poll_interval = poll_interval
+        # Last-seen checkpoint updated_at — per-instance; avoids class-attribute shadowing.
+        self._last_updated_at: str = ""
 
     def compose(self) -> ComposeResult:
         """Build the widget tree: Header, stats bar, node table, Footer."""

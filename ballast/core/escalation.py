@@ -21,14 +21,13 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic_ai import Agent
 
+from ballast.core.constants import HAIKU_MODEL
 from ballast.core.spec import SpecModel
 
 if TYPE_CHECKING:
     from ballast.core.trajectory import NodeAssessment
 
 logger = logging.getLogger(__name__)
-
-_HAIKU = "claude-haiku-4-5-20251001"
 
 _BROKER_SYSTEM = (
     "You are Broker, a spec-compliance reviewer for an AI agent system called Ballast. "
@@ -62,14 +61,14 @@ _ceo_agent: "Agent | None" = None
 def _get_broker_agent() -> Agent:
     global _broker_agent
     if _broker_agent is None:
-        _broker_agent = Agent(model=_HAIKU, system_prompt=_BROKER_SYSTEM)
+        _broker_agent = Agent(model=HAIKU_MODEL, system_prompt=_BROKER_SYSTEM)
     return _broker_agent
 
 
 def _get_ceo_agent() -> Agent:
     global _ceo_agent
     if _ceo_agent is None:
-        _ceo_agent = Agent(model=_HAIKU, system_prompt=_CEO_SYSTEM)
+        _ceo_agent = Agent(model=HAIKU_MODEL, system_prompt=_CEO_SYSTEM)
     return _ceo_agent
 
 
@@ -126,6 +125,8 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
     Never raises. Any exception (LLM error, parse error, network error) is treated
     as an implicit escalation signal so the chain always continues upward.
     """
+    ctx_n = packet.spec.harness.context_window_size
+    ctx_slice = packet.context[-ctx_n:] if ctx_n > 0 else []
     prompt = (
         f"ASSESSMENT\n"
         f"  tool: {packet.assessment.tool_name!r}\n"
@@ -135,8 +136,8 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
         f"SPEC INTENT\n  {packet.spec.intent[:400]}\n\n"
         f"SPEC VERSION\n  {packet.spec.version_hash[:8]}\n\n"
         f"RUN CONTEXT\n  run_id={packet.run_id}  node_index={packet.node_index}\n\n"
-        f"CONTEXT WINDOW (last {min(len(packet.context), 5)} messages)\n"
-        + "\n".join(str(m) for m in packet.context[-5:])
+        f"CONTEXT WINDOW (last {len(ctx_slice)} of {len(packet.context)} messages)\n"
+        + "\n".join(str(m) for m in ctx_slice)
     )
     try:
         result = await agent.run(prompt)
