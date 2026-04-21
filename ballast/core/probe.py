@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +25,15 @@ from ballast.core.constants import HAIKU_MODEL
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```")
+
+
+def _extract_json(raw: str) -> str:
+    """Strip markdown code fences that LLMs sometimes wrap JSON in."""
+    m = _JSON_FENCE_RE.search(raw)
+    return m.group(1) if m else raw
+
 
 _PROBE_SYSTEM = (
     "You are a constraint auditor for Ballast, an AI agent guardrail system. "
@@ -141,7 +151,7 @@ async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
     try:
         result = await agent.run(prompt)
         raw = result.output if hasattr(result, "output") else str(result)
-        parsed = json.loads(raw)
+        parsed = json.loads(_extract_json(raw))
         # Normalise: ensure both keys exist
         return {
             "verified": bool(parsed.get("verified", True)),

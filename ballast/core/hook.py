@@ -22,8 +22,9 @@ Injection mechanism (confirmed against pydantic-ai source):
 """
 from __future__ import annotations
 
+import inspect
 import logging
-from typing import Any, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
@@ -39,7 +40,7 @@ async def run_with_live_spec(
     task: str,
     spec: SpecModel,
     poller: SpecPoller,
-    on_node: Optional[Callable] = None,
+    on_node: Optional[Callable[..., Awaitable[None]]] = None,
 ) -> tuple[Any, list[dict]]:
     """Run agent with live spec polling at every node boundary.
 
@@ -89,13 +90,15 @@ async def run_with_live_spec(
                 ),
             })
 
-            print(
-                f"  node {node_index:02d} | spec:{active_spec.version_hash[:8]}"
-                f" | {type(node).__name__}"
+            logger.debug(
+                "node=%02d spec=%s type=%s",
+                node_index, active_spec.version_hash[:8], type(node).__name__,
             )
 
             if on_node:
-                await on_node(node_index, node, active_spec, delta)
+                coro = on_node(node_index, node, active_spec, delta)
+                if inspect.isawaitable(coro):
+                    await coro
 
             node_index += 1
 

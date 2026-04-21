@@ -115,17 +115,17 @@ def emit_drift_span(
         run_id:      8-character UUID prefix for the current run.
         node_cost:   Cost in USD for this node, from NodeSummary.cost_usd.
     """
-    packet = DriftSpanPacket(
-        label=assessment.label,
-        score=assessment.score,
-        rationale=assessment.rationale,
-        tool_name=assessment.tool_name,
-        spec_version=spec.version_hash,
-        node_index=node_index,
-        run_id=run_id,
-        cost_usd=node_cost,
-    )
     try:
+        packet = DriftSpanPacket(
+            label=assessment.label,
+            score=assessment.score,
+            rationale=assessment.rationale,
+            tool_name=assessment.tool_name,
+            spec_version=spec.version_hash,
+            node_index=node_index,
+            run_id=run_id,
+            cost_usd=node_cost,
+        )
         with trace.get_tracer(_TRACER_NAME).start_as_current_span(_DRIFT_EVENT_SPAN) as span:
             span.set_attribute("ballast.drift.label", packet.label)
             span.set_attribute("ballast.drift.score", packet.score)
@@ -141,7 +141,7 @@ def emit_drift_span(
                 span.set_status(StatusCode.OK)
     except Exception:
         logger.warning(
-            "emit_drift_span failed label=%s node=%d run_id=%s",
-            packet.label, packet.node_index, packet.run_id,
+            "emit_drift_span failed node=%d run_id=%s",
+            node_index, run_id,
             exc_info=True,
         )

@@ -32,6 +32,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from ballast.adapters.otel import emit_drift_span
+from ballast.core.constants import SONNET_MODEL
 from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
@@ -102,7 +103,6 @@ class DriftDetected(Exception):
 # ---------------------------------------------------------------------------
 
 _judge_client: "anthropic.Anthropic | None" = None
-_JUDGE_MODEL = "claude-sonnet-4-6"
 
 
 def _get_judge_client() -> "anthropic.Anthropic":
@@ -297,7 +297,7 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
 
     try:
         response = _get_judge_client().messages.create(
-            model=_JUDGE_MODEL,
+            model=SONNET_MODEL,
             max_tokens=200,
             system=_CONSTRAINT_SYSTEM,
             tools=[_CONSTRAINT_TOOL],
@@ -308,7 +308,7 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
             if block.type == "tool_use":
                 return 0.0 if block.input.get("violation", False) else 1.0
     except Exception as e:
-        logger.debug("constraint_scorer_error node=%s error=%s", type(node).__name__, e)
+        logger.warning("constraint_scorer_failed node=%s — returning 0.5 fail-safe: %s", type(node).__name__, e)
     return 0.5  # Fail-safe: neutral on error
 
 
@@ -368,7 +368,7 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
 
     try:
         response = _get_judge_client().messages.create(
-            model=_JUDGE_MODEL,
+            model=SONNET_MODEL,
             max_tokens=200,
             system=_INTENT_SYSTEM,
             tools=[_INTENT_TOOL],
@@ -380,7 +380,7 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
                 score = float(block.input.get("score", 0.5))
                 return max(0.0, min(1.0, score))
     except Exception as e:
-        logger.debug("intent_scorer_error node=%s error=%s", type(node).__name__, e)
+        logger.warning("intent_scorer_failed node=%s — returning 0.5 fail-safe: %s", type(node).__name__, e)
     return 0.5  # Fail-safe: neutral on error
 
 
@@ -472,8 +472,10 @@ def score_drift(
         )
 
     if not content and not tool_name:
+        # Empty nodes (e.g. pydantic-ai bookkeeping events) have no signal to score.
+        # STALLED is the neutral, conservative label — not a claim of alignment.
         return NodeAssessment(
-            score=1.0, label="PROGRESSING",
+            score=1.0, label="STALLED",
             rationale="no scoreable content",
             tool_score=1.0, constraint_score=1.0, intent_score=1.0,
             tool_name=tool_name,
@@ -763,7 +765,8 @@ async def run_with_spec(
         async for node in agent_run:
 
             # ── 1. Poll for spec update ─────────────────────────────────
-            if poller and node_index % active_spec.harness.spec_poll_interval_nodes == 0:
+            _poll_interval = max(1, active_spec.harness.spec_poll_interval_nodes)
+            if poller and node_index % _poll_interval == 0:
                 new_spec = poller.poll()
                 if new_spec:
                     delta = active_spec.diff(new_spec)
@@ -878,7 +881,8 @@ async def run_with_spec(
             progress.updated_at = datetime.now(timezone.utc).isoformat()
             if assessment.label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
                 progress.last_clean_node_index = node_index
-            if node_index % active_spec.harness.checkpoint_every_n_nodes == 0:
+            _ckpt_interval = max(1, active_spec.harness.checkpoint_every_n_nodes)
+            if node_index % _ckpt_interval == 0:
                 progress.write()
 
             # ── 6b. Cost enforcement ────────────────────────────────────

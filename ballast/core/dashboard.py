@@ -55,12 +55,18 @@ def _fmt_cost(cost: float) -> str:
 def _fmt_time(timestamp: str) -> str:
     """Extract HH:MM:SS from an ISO-8601 UTC timestamp string.
 
-    Returns the raw string on any parse failure so the UI never crashes.
+    Uses datetime.fromisoformat for robustness across +00:00, Z, and millisecond
+    variants. Returns the raw string on any parse failure so the UI never crashes.
     """
+    if not timestamp:
+        return ""
     try:
-        return timestamp[11:19]  # "2026-01-01T12:34:56Z" → "12:34:56"
-    except (IndexError, TypeError):
-        return timestamp or ""
+        from datetime import datetime
+        # Python 3.11+ handles Z natively; earlier versions need replacement.
+        ts = timestamp.replace("Z", "+00:00")
+        return datetime.fromisoformat(ts).strftime("%H:%M:%S")
+    except (ValueError, TypeError, AttributeError):
+        return str(timestamp)
 
 
 # ---------------------------------------------------------------------------

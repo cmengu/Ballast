@@ -16,9 +16,13 @@ Usage:
 """
 from __future__ import annotations
 
+import logging
+
 import httpx
 
 from ballast.core.spec import SpecModel
+
+logger = logging.getLogger(__name__)
 
 
 class SpecPoller:
@@ -29,7 +33,7 @@ class SpecPoller:
     """
 
     def __init__(self, base_url: str, job_id: str) -> None:
-        self.url = f"{base_url}/spec/{job_id}/current"
+        self.url = f"{base_url.rstrip('/')}/spec/{job_id}/current"
         self._current: SpecModel | None = None
 
     def set_initial(self, spec: SpecModel) -> None:
@@ -55,5 +59,6 @@ class SpecPoller:
             new_spec = SpecModel(**data)
             self._current = new_spec   # update baseline so next poll compares correctly
             return new_spec
-        except Exception:
-            return None  # M5 unreachable — silent, agent continues with current spec
+        except Exception as exc:
+            logger.debug("spec_poll_failed url=%s exc=%s", self.url, exc)
+            return None  # M5 unreachable — agent continues with current spec

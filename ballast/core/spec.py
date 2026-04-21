@@ -38,6 +38,8 @@ from typing import List, Literal
 import anthropic
 from pydantic import BaseModel, Field
 
+from ballast.core.constants import SONNET_MODEL
+
 logger = logging.getLogger(__name__)
 
 
@@ -216,7 +218,6 @@ class SpecTooVague(Exception):
 # ---------------------------------------------------------------------------
 
 _spec_client: "anthropic.Anthropic | None" = None
-_SPEC_MODEL = "claude-sonnet-4-6"
 
 
 def _get_client() -> "anthropic.Anthropic":
@@ -372,7 +373,7 @@ def score_specificity(spec: SpecModel) -> float:
     )
     try:
         response = _get_client().messages.create(
-            model=_SPEC_MODEL,
+            model=SONNET_MODEL,
             max_tokens=200,
             system=_SPECIFICITY_SYSTEM,
             tools=[_SPECIFICITY_TOOL],
@@ -382,8 +383,9 @@ def score_specificity(spec: SpecModel) -> float:
         for block in response.content:
             if block.type == "tool_use":
                 return max(0.0, min(1.0, float(block.input.get("score", 0.5))))
-    except Exception:
-        pass
+        logger.warning("score_specificity: no tool_use block in response — returning 0.5")
+    except Exception as exc:
+        logger.warning("score_specificity failed — returning 0.5 fail-safe: %s", exc)
     return 0.5
 
 
@@ -453,7 +455,7 @@ def clarify(spec: SpecModel) -> SpecModel:
     )
     try:
         response = _get_client().messages.create(
-            model=_SPEC_MODEL,
+            model=SONNET_MODEL,
             max_tokens=400,
             system=_CLARIFY_SYSTEM,
             tools=[_CLARIFY_TOOL],
@@ -480,8 +482,8 @@ def clarify(spec: SpecModel) -> SpecModel:
                 )
     except SpecTooVague:
         raise
-    except Exception as e:
-        logger.debug("clarify_error error=%s", e)
+    except Exception as exc:
+        logger.warning("clarify failed — returning original spec unchanged: %s", exc)
     return spec  # Fail-safe: return original unchanged
 
 

@@ -192,17 +192,21 @@ def test_return_value_tuple():
     assert isinstance(audit_log, list)
 
 
-def test_print_format(capsys):
-    """Each node prints '  node NN | spec:XXXXXXXX | ClassName'."""
+def test_node_logged_at_debug(caplog):
+    """Each node is logged at DEBUG: 'node=00 spec=XXXXXXXX type=_MockNode'."""
+    import logging
     nodes = [_MockNode()]
     spec = _locked_spec()
     agent, _ = _make_agent(nodes)
     poller = _make_poller([None])
 
-    asyncio.run(run_with_live_spec(agent, "task", spec, poller))
+    with caplog.at_level(logging.DEBUG, logger="ballast.core.hook"):
+        asyncio.run(run_with_live_spec(agent, "task", spec, poller))
 
-    captured = capsys.readouterr()
-    assert f"  node 00 | spec:{spec.version_hash[:8]} | _MockNode" in captured.out
+    assert any(
+        f"spec={spec.version_hash[:8]}" in r.message and "_MockNode" in r.message
+        for r in caplog.records
+    )
 
 
 def test_on_node_callback_called_with_correct_args():

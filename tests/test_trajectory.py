@@ -449,10 +449,11 @@ def test_score_drift_low_score_returns_violated():
     assert a.score <= 0.25
 
 
-def test_score_drift_empty_node_returns_progressing():
+def test_score_drift_empty_node_returns_stalled():
+    """Empty nodes have no content to score; STALLED is the conservative neutral label."""
     spec = _make_spec_with_irreversible()
     a = score_drift(FakeEmptyNode(), [], spec)
-    assert a.label == "PROGRESSING"
+    assert a.label == "STALLED"
     assert a.score == 1.0
 
 

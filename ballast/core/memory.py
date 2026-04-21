@@ -29,16 +29,21 @@ import tempfile
 import time
 from pathlib import Path
 
+import uuid
+
 import anthropic
 from filelock import FileLock
 from pydantic import BaseModel
 
-MEMORY_DIR = Path(".ballast_memory")
+# CWD-relative default. Override with BALLAST_MEMORY_DIR env var or by calling
+# set_memory_dir() before any memory operations in a process.
+_MEMORY_DIR_ENV = os.environ.get("BALLAST_MEMORY_DIR")
+MEMORY_DIR: Path = Path(_MEMORY_DIR_ENV) if _MEMORY_DIR_ENV else Path(".ballast_memory")
 
 # Semantic consolidation every N real (non-trial) runs.
 CONSOLIDATE_EVERY = 3
 
-_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+from ballast.core.constants import SONNET_MODEL as _ANTHROPIC_MODEL  # type: ignore[assignment]
 
 # Half-life for cross-run observation decay (30 days).
 # Tune this if agents over-rely on old context (increase) or miss relevant history (decrease).
@@ -313,7 +318,9 @@ def extract_quirks(events: list[dict], scope: str) -> list[str]:
             response_model=_QuirksList,
         )
         return [q for q in out.quirks if isinstance(q, str)]
-    except Exception:
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("extract_quirks failed: %s", exc)
         return []
 
 
@@ -341,7 +348,7 @@ def log_run(
             data = _empty_scope_data()
 
         run_entry = {
-            "id": str(int(time.time())),
+            "id": f"{int(time.time())}_{uuid.uuid4().hex[:6]}",
             "goal": goal,
             "timestamp": time.time(),
             "step_count": len(events),
@@ -461,8 +468,9 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
                     break
             if changed:
                 atomic_write_json(path, data)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("patch_quirk failed scope=%r: %s", scope, exc)
 
 
 def memory_report(scope: str) -> str:
@@ -619,5 +627,6 @@ def update_domain_threshold(
 
             data = {"threshold": updated, "domain": domain}
             atomic_write_json(path, data)
-    except Exception:
-        pass  # Never raise — threshold update is best-effort
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).warning("update_domain_threshold failed domain=%r: %s", domain, exc)

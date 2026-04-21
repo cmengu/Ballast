@@ -12,6 +12,8 @@ training dataset audit trail (projet-overview.md invariant 4).
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -65,9 +67,28 @@ class BallastProgress:
             self.active_spec_hash = self.spec_hash
 
     def write(self, path: str = CHECKPOINT_FILE) -> None:
-        """Serialise to JSON. NodeSummary objects are converted via asdict."""
+        """Serialise to JSON atomically. Crash mid-write cannot corrupt the file.
+
+        Writes to a temp file in the same directory, then os.replace — guaranteed
+        atomic on POSIX systems so a partial write never leaves a broken checkpoint.
+        """
         data = asdict(self)
-        Path(path).write_text(json.dumps(data, indent=2), encoding="utf-8")
+        payload = json.dumps(data, indent=2)
+        dest = Path(path)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+        try:
+            os.write(fd, payload.encode("utf-8"))
+            os.fsync(fd)
+            os.close(fd)
+            os.replace(tmp, dest)
+        except BaseException:
+            os.close(fd)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     @classmethod
     def read(cls, path: str = CHECKPOINT_FILE) -> "BallastProgress | None":

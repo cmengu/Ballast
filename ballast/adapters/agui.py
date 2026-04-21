@@ -1,22 +1,22 @@
 """AG-UI adapter — LangGraph ReAct agent streaming AG-UI events.
 
-OBSERVATION PHASE: print statements are intentional.
-Remove them in Week 2 when routing to trajectory validator.
+OBSERVATION PHASE: events are logged at DEBUG level.
+Promote to INFO or wire into trajectory validator in a future step.
 """
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import AsyncIterator
 
-from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_anthropic import ChatAnthropic
 from langgraph.prebuilt import create_react_agent
 
 from ballast.core.stream import AgentStream
 
-load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 @tool
@@ -38,11 +38,15 @@ class AGUIAdapter(AgentStream):
       3. Which event type is the natural intervention point?
     """
 
-    def __init__(self, model: str = "claude-haiku-4-5-20251001") -> None:
+    def __init__(self, model: str = "claude-haiku-4-5-20251001", load_env: bool = False) -> None:
+        if load_env:
+            from dotenv import load_dotenv
+            load_dotenv()
         api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             raise EnvironmentError(
-                "ANTHROPIC_API_KEY not set. Copy .env.example to .env and fill it in."
+                "ANTHROPIC_API_KEY not set. "
+                "Set the env var directly or pass load_env=True to load a .env file."
             )
         llm = ChatAnthropic(model=model, api_key=api_key)
         self._graph = create_react_agent(llm, tools=[get_word_count])
@@ -53,9 +57,7 @@ class AGUIAdapter(AgentStream):
         Prints every event type + key fields to stdout for observation.
         `spec` is accepted but unused in observation phase.
         """
-        print(f"\n{'='*60}")
-        print(f"[AGUIAdapter] Goal: {goal!r}")
-        print(f"{'='*60}\n")
+        logger.debug("[AGUIAdapter] goal=%r", goal)
 
         event_sequence = []
         input_messages = {"messages": [{"role": "user", "content": goal}]}
@@ -65,30 +67,33 @@ class AGUIAdapter(AgentStream):
             event_name = event.get("name", "")
             event_sequence.append(event_type)
 
-            print(f"[EVENT] {event_type}  name={event_name!r}")
+            logger.debug("[EVENT] %s  name=%r", event_type, event_name)
 
-            # Print data fields that answer the observation questions.
+            # Log data fields that answer the observation questions.
             data = event.get("data", {})
             if data:
-                # For STATE_SNAPSHOT equivalents: print full state
                 if event_type in ("on_chain_start", "on_chain_end", "on_chain_stream"):
                     chunk = data.get("chunk") or data.get("output") or data.get("input")
                     if chunk is not None:
-                        print(f"  data.chunk/output/input: {json.dumps(_truncate(chunk), indent=2)}")
-                # For tool calls: print tool name and args
+                        try:
+                            logger.debug("  data.chunk/output/input: %s",
+                                         json.dumps(_truncate(chunk), indent=2))
+                        except (TypeError, ValueError):
+                            logger.debug("  data.chunk/output/input: %r", _truncate(chunk))
                 if event_type in ("on_tool_start", "on_tool_end"):
-                    print(f"  data: {json.dumps(_truncate(data), indent=2)}")
-                # For LLM events: print token count or message content
+                    try:
+                        logger.debug("  data: %s", json.dumps(_truncate(data), indent=2))
+                    except (TypeError, ValueError):
+                        logger.debug("  data: %r", _truncate(data))
                 if event_type in ("on_chat_model_start", "on_chat_model_end", "on_chat_model_stream"):
                     chunk = data.get("chunk") or data.get("output")
                     if chunk is not None:
-                        print(f"  data.chunk/output: {_truncate_str(str(chunk), 200)}")
+                        logger.debug("  data.chunk/output: %s", _truncate_str(str(chunk), 200))
 
             yield event
 
-        print(f"\n[AGUIAdapter] Event sequence ({len(event_sequence)} total):")
-        for i, et in enumerate(event_sequence, 1):
-            print(f"  {i:3d}. {et}")
+        logger.debug("[AGUIAdapter] event sequence (%d total): %s",
+                     len(event_sequence), event_sequence)
 
 
 def _truncate(obj: object, max_len: int = 300) -> object:

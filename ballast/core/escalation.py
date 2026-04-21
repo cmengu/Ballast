@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -28,6 +29,15 @@ if TYPE_CHECKING:
     from ballast.core.trajectory import NodeAssessment
 
 logger = logging.getLogger(__name__)
+
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```")
+
+
+def _extract_json(raw: str) -> str:
+    """Strip markdown code fences that LLMs sometimes wrap JSON in."""
+    m = _JSON_FENCE_RE.search(raw)
+    return m.group(1) if m else raw
+
 
 _BROKER_SYSTEM = (
     "You are Broker, a spec-compliance reviewer for an AI agent system called Ballast. "
@@ -142,7 +152,7 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
     try:
         result = await agent.run(prompt)
         raw = result.output if hasattr(result, "output") else str(result)
-        return json.loads(raw)
+        return json.loads(_extract_json(raw))
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "escalation_level_failed agent=%s exc=%s — treating as escalate",
