@@ -152,7 +152,15 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
     try:
         result = await agent.run(prompt)
         raw = result.output if hasattr(result, "output") else str(result)
-        return json.loads(_extract_json(raw))
+        parsed = json.loads(_extract_json(raw))
+        if not isinstance(parsed, dict):
+            logger.warning(
+                "escalation_level_non_dict agent=%s type=%s — treating as escalate",
+                agent.__class__.__name__,
+                type(parsed).__name__,
+            )
+            return {"escalate": True}
+        return parsed
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "escalation_level_failed agent=%s exc=%s — treating as escalate",
