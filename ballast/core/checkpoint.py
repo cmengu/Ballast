@@ -77,13 +77,16 @@ class BallastProgress:
         dest = Path(path)
         dest.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp = tempfile.mkstemp(dir=dest.parent, suffix=".tmp")
+        fd_open = True
         try:
             os.write(fd, payload.encode("utf-8"))
             os.fsync(fd)
             os.close(fd)
+            fd_open = False
             os.replace(tmp, dest)
         except BaseException:
-            os.close(fd)
+            if fd_open:
+                os.close(fd)
             try:
                 os.unlink(tmp)
             except OSError:
