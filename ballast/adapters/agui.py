@@ -29,8 +29,8 @@ class AGUIAdapter(AgentStream):
     """Streams AG-UI events from a LangGraph ReAct agent.
 
     Uses LangGraph astream_events (v2) as the event source.
-    Each LangGraph event is printed raw so the event sequence can be
-    observed before trajectory validation logic is built on top.
+    Each LangGraph event is emitted as a DEBUG log so the event sequence
+    can be observed before trajectory validation logic is built on top.
 
     Answers on first real run:
       1. Which event types fire on each step?
@@ -54,7 +54,7 @@ class AGUIAdapter(AgentStream):
     async def stream(self, goal: str, spec: dict) -> AsyncIterator[object]:
         """Run the agent against `goal` and yield raw LangGraph events.
 
-        Prints every event type + key fields to stdout for observation.
+        Logs every event type + key fields at DEBUG level for observation.
         `spec` is accepted but unused in observation phase.
         """
         logger.debug("[AGUIAdapter] goal=%r", goal)
