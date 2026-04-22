@@ -407,8 +407,8 @@ def consolidate(scope: str) -> bool:
         )
 
         top_quirks = sorted(
-            data.get("quirks", []),
-            key=lambda q: q.get("confidence", 0) if isinstance(q, dict) else 0,
+            [q for q in data.get("quirks", []) if isinstance(q, dict)],
+            key=lambda q: q.get("confidence", 0),
             reverse=True,
         )[:10]
         quirks_summary = json.dumps(
