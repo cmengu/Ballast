@@ -7,8 +7,8 @@ Wires Agent.iter + SpecPoller + SpecDelta injection:
     - At every node boundary: poll for spec update
     - On spec change: inject SpecDelta.as_injection() into message_history
     - Stamp every node in the audit log with active spec_hash + node_type
-    - Print: "node 00 | spec:a3f2xxxx | NodeTypeName"
-    - Call optional async on_node(node_index, node, active_spec, delta) callback
+    - Log at DEBUG: "node 00 | spec:a3f2xxxx | NodeTypeName"
+    - Call optional on_node(node_index, node, active_spec, delta) callback (sync or async)
 
 Returns:
     (output, audit_log)
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Union
 
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
@@ -40,7 +40,7 @@ async def run_with_live_spec(
     task: str,
     spec: SpecModel,
     poller: SpecPoller,
-    on_node: Optional[Callable[..., Awaitable[None]]] = None,
+    on_node: Optional[Union[Callable[..., Awaitable[None]], Callable[..., None]]] = None,
 ) -> tuple[Any, list[dict]]:
     """Run agent with live spec polling at every node boundary.
 
