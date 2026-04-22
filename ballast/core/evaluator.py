@@ -5,7 +5,8 @@ Public interface:
         -> tuple[str, str]  (label: "PROGRESSING"|"VIOLATED"|"STALLED", rationale: str)
         — Called by score_drift() for nodes in the ambiguous zone (0.25 < aggregate < 0.85).
           full_window is a list of compact dicts (see _layer2_evaluator_context in trajectory).
-          Returns ("STALLED", "evaluator_error: ...") on any exception (fail-open).
+          Returns ("STALLED", "evaluator_error: ...") on any LLM / parse exception (fail-open).
+          Also returns "STALLED" when the LLM emits an unrecognised label — never crashes.
     EvaluatorPacket
         — Typed input envelope passed to _call_evaluator().
 
