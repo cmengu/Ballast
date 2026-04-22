@@ -49,6 +49,7 @@ class SpecPoller:
         """
         if self._current is None:
             return None
+        data: dict | None = None
         try:
             r = httpx.get(self.url, timeout=2.0)
             if r.status_code != 200:
@@ -59,6 +60,15 @@ class SpecPoller:
             new_spec = SpecModel(**data)
             self._current = new_spec   # update baseline so next poll compares correctly
             return new_spec
-        except Exception as exc:
-            logger.debug("spec_poll_failed url=%s exc=%s", self.url, exc)
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            logger.debug("spec_poll_unreachable url=%s exc=%s", self.url, exc)
             return None  # M5 unreachable — agent continues with current spec
+        except Exception as exc:
+            # data-shape or validation error — the server returned something unexpected
+            logger.warning(
+                "spec_poll_invalid_body url=%s version_hash=%s exc=%s",
+                self.url,
+                (data or {}).get("version_hash", "?"),
+                exc,
+            )
+            return None
