@@ -123,6 +123,28 @@ def test_run_guard_seed_prior_spend_raises_if_guard_has_spend():
         rg.seed_prior_spend(0.50)
 
 
+def test_agent_guard_seed_spent_restores_cap():
+    g = AgentCostGuard("w", agent_cap_usd=0.10, escalation_pool_usd=0.03)
+    g.seed_spent(0.09, 0.0)
+    with pytest.raises(AgentCapExceeded):
+        g.check_and_record(0.02)
+
+
+def test_agent_guard_seed_spent_raises_if_nonempty():
+    g = AgentCostGuard("w", agent_cap_usd=10.0, escalation_pool_usd=0.03)
+    g.record(0.01)
+    with pytest.raises(ValueError, match="cannot seed"):
+        g.seed_spent(0.05, 0.0)
+
+
+def test_run_guard_seed_agent_spends():
+    rg = RunCostGuard(hard_cap_usd=10.0)
+    rg.register("worker", cap=0.10, escalation_pool=0.0)
+    rg.seed_agent_spends({"worker": {"spent": 0.09, "escalation_spent": 0.0}})
+    with pytest.raises(AgentCapExceeded):
+        rg.check_and_record("worker", 0.02)
+
+
 def test_run_with_spec_seeds_cost_guard_on_resume(tmp_path, monkeypatch):
     """On resume, cost_guard._total is seeded from progress.total_cost_usd.
 
@@ -157,6 +179,39 @@ def test_run_with_spec_seeds_cost_guard_on_resume(tmp_path, monkeypatch):
 
     with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         with pytest.raises(HardCapExceeded):
+            asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg))
+
+
+def test_run_with_spec_seeds_per_agent_cap_on_resume(tmp_path, monkeypatch):
+    """Per-agent spent is restored from checkpoint so caps cannot be bypassed on resume."""
+    monkeypatch.chdir(tmp_path)
+    from ballast.core.checkpoint import BallastProgress
+    from datetime import datetime, timezone
+
+    spec = _make_spec()
+    prior = BallastProgress(
+        spec_hash=spec.version_hash,
+        active_spec_hash=spec.version_hash,
+        spec_intent=spec.intent,
+        run_id="prior",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        total_cost_usd=0.05,
+        last_clean_node_index=0,
+        remaining_success_criteria=list(spec.success_criteria),
+        agent_spend_by_id={
+            "default": {"spent": 0.09, "escalation_spent": 0.0},
+        },
+    )
+    prior.write(str(tmp_path / "ballast-progress.json"))
+
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent(nodes, node_costs=[0.02])
+    rg = RunCostGuard(hard_cap_usd=10.0)
+    rg.register("default", cap=0.10, escalation_pool=0.0)
+
+    with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
+        with pytest.raises(AgentCapExceeded):
             asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg))
 
 

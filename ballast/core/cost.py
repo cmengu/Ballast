@@ -127,6 +127,16 @@ class AgentCostGuard:
         self.check(actual, is_escalation)
         self.record(actual, is_escalation)
 
+    def seed_spent(self, spent: float, escalation_spent: float = 0.0) -> None:
+        """Restore totals from a checkpoint. Call before any check_and_record."""
+        if self._spent != 0.0 or self._escalation_spent != 0.0:
+            raise ValueError(
+                f"cannot seed agent {self.agent_id!r}: already has "
+                f"spent={self._spent} escalation_spent={self._escalation_spent}"
+            )
+        self._spent = spent
+        self._escalation_spent = escalation_spent
+
     @property
     def spent(self) -> float:
         """Total non-escalation spend recorded so far."""
@@ -208,6 +218,22 @@ class RunCostGuard:
                 "cannot seed a guard that has already recorded spend"
             )
         self._total = prior_spend
+
+    def seed_agent_spends(
+        self,
+        spend_map: dict[str, dict[str, float]],
+    ) -> None:
+        """Restore per-agent spent totals from checkpoint JSON.
+
+        Each value must be {"spent": float, "escalation_spent": float}.
+        Unknown agent_ids are skipped. Call after register() and seed_prior_spend().
+        """
+        for aid, payload in spend_map.items():
+            if aid not in self._agents:
+                continue
+            spent = float(payload.get("spent", 0.0))
+            esc = float(payload.get("escalation_spent", 0.0))
+            self._agents[aid].seed_spent(spent, esc)
 
     @property
     def total_spent(self) -> float:
