@@ -135,21 +135,22 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
     Never raises. Any exception (LLM error, parse error, network error) is treated
     as an implicit escalation signal so the chain always continues upward.
     """
-    ctx_n = packet.spec.harness.context_window_size
-    ctx_slice = packet.context[-ctx_n:] if ctx_n > 0 else []
-    prompt = (
-        f"ASSESSMENT\n"
-        f"  tool: {packet.assessment.tool_name!r}\n"
-        f"  score: {packet.assessment.score:.3f}\n"
-        f"  label: {packet.assessment.label}\n"
-        f"  rationale: {packet.assessment.rationale}\n\n"
-        f"SPEC INTENT\n  {packet.spec.intent[:400]}\n\n"
-        f"SPEC VERSION\n  {packet.spec.version_hash[:8]}\n\n"
-        f"RUN CONTEXT\n  run_id={packet.run_id}  node_index={packet.node_index}\n\n"
-        f"CONTEXT WINDOW (last {len(ctx_slice)} of {len(packet.context)} messages)\n"
-        + "\n".join(str(m) for m in ctx_slice)
-    )
     try:
+        harness = packet.spec.harness
+        ctx_n = int(getattr(harness, "context_window_size", 0) or 0)
+        ctx_slice = packet.context[-ctx_n:] if ctx_n > 0 else []
+        prompt = (
+            f"ASSESSMENT\n"
+            f"  tool: {packet.assessment.tool_name!r}\n"
+            f"  score: {packet.assessment.score:.3f}\n"
+            f"  label: {packet.assessment.label}\n"
+            f"  rationale: {packet.assessment.rationale}\n\n"
+            f"SPEC INTENT\n  {packet.spec.intent[:400]}\n\n"
+            f"SPEC VERSION\n  {packet.spec.version_hash[:8]}\n\n"
+            f"RUN CONTEXT\n  run_id={packet.run_id}  node_index={packet.node_index}\n\n"
+            f"CONTEXT WINDOW (last {len(ctx_slice)} of {len(packet.context)} messages)\n"
+            + "\n".join(str(m) for m in ctx_slice)
+        )
         result = await agent.run(prompt)
         raw = result.output if hasattr(result, "output") else str(result)
         parsed = json.loads(_extract_json(raw))
