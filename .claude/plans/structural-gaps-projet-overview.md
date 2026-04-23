@@ -12,15 +12,9 @@ These are the pieces that make Ballast a **distributed system** rather than a **
 
 ### 1. M5 spec server — `GET /spec/{job_id}/current` (overview ~71, ~333–344)
 
-`SpecPoller` in `sync.py` issues HTTP GETs to this endpoint, but **no service hosts it**. Without this, Invariant 2 (“spec updates propagate live to in-flight agents”) is not verifiable in production.
+`ballast/core/server.py` already exposes `GET /spec/{job_id}/current` and `POST /spec/{job_id}/update` (in-memory per process). That is enough for local / dev polling with `SpecPoller`.
 
-**Need:** A FastAPI app on M5 (project already has `fastapi` + `uvicorn`) exposing at least:
-
-- `GET /spec/{job_id}/current` — latest `SpecModel` JSON  
-- `POST /spec/{job_id}` — accept a new spec, lock with `parent_hash` chain, persist  
-- Storage for the **version chain**
-
-**Check:** `ballast/core/server.py` — confirm whether it already serves this contract or is for something else; extend or add `ballast/server/spec.py` as appropriate.
+**Still missing for production M5:** durable storage, **version chain** (`parent_hash` history), auth beyond the optional `BALLAST_SPEC_SERVER_TOKEN` on POST, and a first-class `POST /spec/{job_id}` that locks and persists successive versions.
 
 ### 2. M5 job dispatcher → M2 (overview ~67–73, ~866–871)
 

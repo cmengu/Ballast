@@ -217,13 +217,13 @@ python scripts/server.py
 | Component | Status | Notes |
 |-----------|--------|-------|
 | `spec.py` — parse, lock, diff, inject | done | `SpecModel`, `SpecDelta`, `as_injection()` |
-| `trajectory.py` — node scoring | done | tool/constraint/intent, `DriftDetected` |
-| `server.py` + `sync.py` — live updates | done | FastAPI server + SpecPoller |
-| `guardrails.py` — escalation engine | planned | replan loop detector, escalation chain |
-| `cost.py` — hard spend cap | planned | `$0.15/run`, `$300` total hard stop |
-| `dashboard.py` — Textual TUI | planned | drift visible in real time |
-| `adapters/otel.py` — typed spans | planned | `spec_violation`, `escalation_to_broker` as OTel events |
-| `adapters/smolagents.py` — M2 workers | planned | lightweight worker agents with local verification |
+| `trajectory.py` — node scoring | done | tool/constraint/intent, escalation, probe, OTel |
+| `server.py` + `sync.py` — live updates | done | FastAPI + `SpecPoller`; optional `BALLAST_SPEC_SERVER_TOKEN` on POST |
+| `guardrails.py` — corrections + resume | done | `build_correction`, `HardInterrupt`, `can_resume` |
+| `cost.py` — hard spend cap | done | per-agent + global hard stop (`HARD_CAP_USD`) |
+| `dashboard.py` — Textual TUI | done | live `ballast-progress.json` |
+| `adapters/otel.py` — typed spans | done | `emit_drift_span` for drift / violations |
+| `adapters/smolagents.py` — M2 workers | planned | worker adapter for non–pydantic-ai runtimes |
 
 ---
 
