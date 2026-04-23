@@ -3,7 +3,6 @@
 No LLM calls. Uses tmp_path for filesystem isolation.
 """
 import math
-import time
 from pathlib import Path
 
 import pytest

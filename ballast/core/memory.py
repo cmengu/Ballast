@@ -23,11 +23,14 @@ Public interface:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import tempfile
 import time
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 import uuid
 
@@ -162,7 +165,7 @@ def atomic_write_json(path: Path, data: dict) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
         os.replace(tmp_path, path)
-    except BaseException:
+    except Exception:
         try:
             os.unlink(tmp_path)
         except OSError:
@@ -231,7 +234,9 @@ def write(scope: str, new_observations: list[str]) -> None:
 
     Decay uses long-term half-life (30 days) — appropriate for cross-run memory.
     """
-    new_observations = [o for o in list(new_observations) if o and o.strip()]
+    new_observations = list(
+        dict.fromkeys(o.strip() for o in new_observations if o and o.strip())
+    )
     if not new_observations:
         return
 
@@ -439,7 +444,10 @@ def consolidate(scope: str) -> bool:
             data["last_consolidated"] = time.time()
             atomic_write_json(path, data)
             return True
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "consolidate_failed scope=%r: %s", scope, exc, exc_info=True
+            )
             return False
 
 
@@ -574,7 +582,8 @@ def get_domain_threshold(domain: str) -> float:
     if not path.exists():
         return _DEFAULT_THRESHOLD
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        with _scope_lock(path):
+            data = json.loads(path.read_text(encoding="utf-8"))
         return float(data.get("threshold", _DEFAULT_THRESHOLD))
     except (json.JSONDecodeError, OSError, ValueError):
         return _DEFAULT_THRESHOLD
