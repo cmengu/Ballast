@@ -25,6 +25,7 @@ from typing import Any
 import anthropic
 
 from ballast.core.constants import HAIKU_MODEL
+from ballast.core.node_tools import duck_tool_info
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
@@ -203,23 +204,8 @@ def evaluate_node(
         ("VIOLATED", rationale)    — node breaches a constraint or works against goal.
         ("STALLED", error_note)    — evaluator failed; fail-open to pre-wiring behavior.
     """
-    # Minimal duck-typed node extraction — does NOT import _extract_node_info from
-    # trajectory.py to avoid circular imports (trajectory imports evaluator).
-    tool_name = ""
-    tool_args: dict = {}
-    content = ""
-
-    if hasattr(node, "tool_name"):
-        tool_name = str(node.tool_name)
-    args_val = getattr(node, "args", None)
-    if isinstance(args_val, dict):
-        tool_args = args_val
-
-    for attr in ("text", "content", "output"):
-        val = getattr(node, attr, None)
-        if val and isinstance(val, str):
-            content = val[:600]
-            break
+    # Shared duck-typed extraction with probe.py (node_tools — no trajectory import).
+    tool_name, tool_args, content = duck_tool_info(node, content_max=600)
 
     # Build context summary from full_window.
     # Only dict entries are included — raw pydantic-ai nodes are skipped.
