@@ -22,6 +22,7 @@ Injection mechanism (confirmed against pydantic-ai source):
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from typing import Any, Awaitable, Callable, Optional, Union
@@ -70,7 +71,7 @@ async def run_with_live_spec(
         async for node in run:
             # Poll for spec update at every node boundary
             delta: Optional[SpecDelta] = None
-            new_spec = poller.poll()
+            new_spec = await asyncio.to_thread(poller.poll)
             if new_spec:
                 delta = active_spec.diff(new_spec)
                 active_spec = new_spec
