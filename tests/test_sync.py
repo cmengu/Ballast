@@ -73,6 +73,22 @@ def test_post_overwrites_existing_spec():
     assert r.json()["version_hash"] == spec_v2.version_hash
 
 
+def test_post_rejects_without_token_when_configured(monkeypatch):
+    import ballast.core.server as srv
+
+    monkeypatch.setattr(srv, "_SPEC_SERVER_TOKEN", "secret")
+    spec = _make_spec()
+    c = TestClient(srv.app)
+    r = c.post("/spec/job-001/update", json=spec.model_dump())
+    assert r.status_code == 401
+    r2 = c.post(
+        "/spec/job-001/update",
+        json=spec.model_dump(),
+        headers={"X-Ballast-Token": "secret"},
+    )
+    assert r2.status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # SpecPoller isolation tests (5 tests, httpx.get mocked)
 # ---------------------------------------------------------------------------
