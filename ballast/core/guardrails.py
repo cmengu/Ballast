@@ -3,8 +3,7 @@
 Public interface:
     build_correction(assessment, spec, node_index) -> str
         Builds the soft correction string injected between nodes when
-        assessment.score < spec.drift_threshold. Replaces the inline
-        TODO-Step-6 block in trajectory.py:run_with_spec.
+        assessment.score < spec.drift_threshold.
 
     HardInterrupt(Exception)
         Raised when a VIOLATED_IRREVERSIBLE node has no escalation path.
@@ -12,9 +11,9 @@ Public interface:
         the interruption. Wired in run_with_spec once escalation.py is used.
 
     can_resume(progress, spec) -> bool
-        Pure predicate. Returns True if progress is a non-complete checkpoint
-        whose spec_hash matches spec.version_hash. Replaces the inline
-        three-part boolean in run_with_spec's resume branch.
+        Pure predicate. True only for a resumable checkpoint: same dispatch
+        spec, active spec at crash equals dispatch (no mid-run version we
+        cannot reconstruct), and run not complete.
 """
 from __future__ import annotations
 
@@ -121,5 +120,6 @@ def can_resume(progress: BallastProgress | None, spec: SpecModel) -> bool:
     return (
         progress is not None
         and progress.spec_hash == spec.version_hash
+        and progress.active_spec_hash == spec.version_hash
         and not progress.is_complete
     )

@@ -217,3 +217,11 @@ class TestCanResume:
         other_spec = _make_spec(intent="other")
         progress = _make_progress(other_spec, is_complete=True)
         assert can_resume(progress, spec) is False
+
+    def test_returns_false_when_active_spec_differs_from_dispatch(self):
+        """Mid-run live spec update: checkpoint active ≠ dispatch — cannot safely resume."""
+        spec = _make_spec()
+        other = _make_spec(intent="different dispatch would not matter here")
+        progress = _make_progress(spec)
+        progress.active_spec_hash = other.version_hash
+        assert can_resume(progress, spec) is False
