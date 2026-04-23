@@ -12,10 +12,13 @@ training dataset audit trail (projet-overview.md invariant 4).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 CHECKPOINT_FILE = "ballast-progress.json"
 
@@ -61,6 +64,8 @@ class BallastProgress:
     remaining_success_criteria: list = field(default_factory=list)
     last_escalation: str | None = None
     is_complete: bool = False
+    # agent_id -> {"spent": float, "escalation_spent": float} — restored on resume
+    agent_spend_by_id: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.active_spec_hash:
@@ -84,7 +89,7 @@ class BallastProgress:
             os.close(fd)
             fd_open = False
             os.replace(tmp, dest)
-        except BaseException:
+        except Exception:
             if fd_open:
                 os.close(fd)
             try:
@@ -95,15 +100,43 @@ class BallastProgress:
 
     @classmethod
     def read(cls, path: str = CHECKPOINT_FILE) -> "BallastProgress | None":
-        """Deserialise from JSON. Returns None if file does not exist."""
+        """Deserialise from JSON. Returns None if file does not exist or is invalid."""
         p = Path(path)
         if not p.exists():
             return None
-        data = json.loads(p.read_text(encoding="utf-8"))
-        data["completed_node_summaries"] = [
-            NodeSummary(**n) for n in data["completed_node_summaries"]
-        ]
-        return cls(**data)
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeError) as exc:
+            logger.warning("checkpoint_read_failed path=%s: %s", path, exc)
+            return None
+        raw_summaries = data.get("completed_node_summaries", [])
+        summaries: list[NodeSummary] = []
+        if not isinstance(raw_summaries, list):
+            logger.warning(
+                "checkpoint_invalid_summaries path=%s type=%s",
+                path,
+                type(raw_summaries).__name__,
+            )
+            return None
+        for n in raw_summaries:
+            if not isinstance(n, dict):
+                continue
+            try:
+                summaries.append(NodeSummary(**n))
+            except (TypeError, KeyError) as exc:
+                logger.warning("checkpoint_skip_node_summary path=%s: %s", path, exc)
+        data["completed_node_summaries"] = summaries
+        if "agent_spend_by_id" not in data or not isinstance(
+            data.get("agent_spend_by_id"), dict
+        ):
+            data["agent_spend_by_id"] = {}
+        allowed = {f.name for f in fields(cls)}
+        filtered = {k: v for k, v in data.items() if k in allowed}
+        try:
+            return cls(**filtered)
+        except (TypeError, KeyError, ValueError) as exc:
+            logger.warning("checkpoint_deserialize_failed path=%s: %s", path, exc)
+            return None
 
     def resume_context(self) -> str:
         """Plain-text summary prepended to the task string on resume."""
@@ -127,7 +160,9 @@ class BallastProgress:
             f"Violations: {self.total_violations}\n"
             f"Cost so far: ${self.total_cost_usd:.4f}\n"
             f"Remaining success criteria:\n{remaining}\n"
-            f"Resume from node #{self.last_clean_node_index + 1}.\n"
-            f"Do not repeat completed work.\n"
+            f"Next Ballast audit row will use index #{self.last_clean_node_index + 1} "
+            f"(monotonic run ledger).\n"
+            f"The agent runtime may restart its internal step counter on resume — "
+            f"follow this context and avoid duplicating completed work.\n"
             f"[END RESUME CONTEXT]"
         )

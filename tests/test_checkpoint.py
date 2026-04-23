@@ -89,6 +89,12 @@ def test_read_returns_none_when_file_missing(tmp_path):
     assert result is None
 
 
+def test_read_returns_none_on_corrupt_json(tmp_path):
+    path = tmp_path / "bad.json"
+    path.write_text("not valid json{{{", encoding="utf-8")
+    assert BallastProgress.read(str(path)) is None
+
+
 def test_spec_transitions_round_trip(tmp_path):
     path = str(tmp_path / "progress.json")
     p = _make_progress()
@@ -123,7 +129,8 @@ def test_resume_context_next_node_after_last_clean():
     p = _make_progress()
     p.last_clean_node_index = 7
     ctx = p.resume_context()
-    assert "Resume from node #8" in ctx
+    assert "#8" in ctx
+    assert "monotonic" in ctx.lower() or "audit" in ctx.lower()
 
 
 def test_resume_context_no_summaries_shows_none():
