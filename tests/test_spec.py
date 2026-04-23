@@ -345,6 +345,33 @@ def test_diff_no_changes_produces_empty_delta():
     assert delta.added_tools == []
     assert delta.removed_tools == []
     assert delta.intent_changed is False
+    assert delta.added_success_criteria == []
+    assert delta.removed_success_criteria == []
+
+
+def test_diff_detects_added_success_criterion():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written", "includes executive summary"],
+        allowed_tools=["web_search", "write_file"],
+    ))
+    delta = v1.diff(v2)
+    assert delta.added_success_criteria == ["includes executive summary"]
+    assert delta.removed_success_criteria == []
+
+
+def test_diff_detects_drift_threshold_change():
+    v1 = _make_v1()
+    v2 = lock(SpecModel(
+        intent="Write a report on AI companies",
+        success_criteria=["report is written"],
+        allowed_tools=["web_search", "write_file"],
+        drift_threshold=0.55,
+    ))
+    delta = v1.diff(v2)
+    assert delta.drift_threshold_changed is True
+    assert delta.new_drift_threshold == pytest.approx(0.55)
 
 
 def test_as_injection_contains_spec_update_header():

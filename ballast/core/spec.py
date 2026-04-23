@@ -89,6 +89,16 @@ class SpecDelta(BaseModel):
     added_tools: List[str] = Field(default_factory=list)
     removed_tools: List[str] = Field(default_factory=list)
     intent_changed: bool = False
+    added_success_criteria: List[str] = Field(default_factory=list)
+    removed_success_criteria: List[str] = Field(default_factory=list)
+    added_irreversible_actions: List[str] = Field(default_factory=list)
+    removed_irreversible_actions: List[str] = Field(default_factory=list)
+    scope_changed: bool = False
+    old_scope: str = ""
+    new_scope: str = ""
+    drift_threshold_changed: bool = False
+    old_drift_threshold: float = 0.4
+    new_drift_threshold: float = 0.4
 
     def as_injection(self) -> str:
         """Return a plain-text string the agent reads as mid-run context."""
@@ -110,6 +120,35 @@ class SpecDelta(BaseModel):
             lines.append(f"TOOLS ADDED: {', '.join(self.added_tools)}")
         if self.intent_changed:
             lines.append("INTENT CHANGED — re-read spec before next action.")
+        if self.added_success_criteria:
+            lines.append(
+                "NEW SUCCESS CRITERIA: "
+                + "; ".join(self.added_success_criteria)
+            )
+        if self.removed_success_criteria:
+            lines.append(
+                "REMOVED SUCCESS CRITERIA: "
+                + "; ".join(self.removed_success_criteria)
+            )
+        if self.added_irreversible_actions:
+            lines.append(
+                "NEW IRREVERSIBLE ACTIONS (hard-interrupt tools): "
+                + ", ".join(self.added_irreversible_actions)
+            )
+        if self.removed_irreversible_actions:
+            lines.append(
+                "IRREVERSIBLE ACTIONS REMOVED: "
+                + ", ".join(self.removed_irreversible_actions)
+            )
+        if self.scope_changed:
+            lines.append(
+                f"SCOPE CHANGED — was: {self.old_scope!r} → now: {self.new_scope!r}"
+            )
+        if self.drift_threshold_changed:
+            lines.append(
+                f"DRIFT THRESHOLD CHANGED: {self.old_drift_threshold:.2f} → "
+                f"{self.new_drift_threshold:.2f} (below threshold triggers correction)."
+            )
         lines.append("[Continue from current node under updated spec.]")
         return "\n".join(lines)
 
@@ -179,6 +218,8 @@ class SpecModel(BaseModel):
         Caller: trajectory.py — active_spec.diff(new_spec) at every node boundary.
         Both specs should be locked before calling diff().
         """
+        drift_changed = self.drift_threshold != other.drift_threshold
+        scope_changed = self.scope != other.scope
         return SpecDelta(
             from_hash=self.version_hash,
             to_hash=other.version_hash,
@@ -187,6 +228,24 @@ class SpecModel(BaseModel):
             added_tools=[t for t in other.allowed_tools if t not in self.allowed_tools],
             removed_tools=[t for t in self.allowed_tools if t not in other.allowed_tools],
             intent_changed=self.intent != other.intent,
+            added_success_criteria=[
+                c for c in other.success_criteria if c not in self.success_criteria
+            ],
+            removed_success_criteria=[
+                c for c in self.success_criteria if c not in other.success_criteria
+            ],
+            added_irreversible_actions=[
+                a for a in other.irreversible_actions if a not in self.irreversible_actions
+            ],
+            removed_irreversible_actions=[
+                a for a in self.irreversible_actions if a not in other.irreversible_actions
+            ],
+            scope_changed=scope_changed,
+            old_scope=self.scope if scope_changed else "",
+            new_scope=other.scope if scope_changed else "",
+            drift_threshold_changed=drift_changed,
+            old_drift_threshold=self.drift_threshold,
+            new_drift_threshold=other.drift_threshold,
         )
 
 
