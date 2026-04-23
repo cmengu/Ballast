@@ -736,12 +736,15 @@ async def run_with_spec(
         node_offset = progress.last_clean_node_index + 1
         if cost_guard is not None:
             cost_guard.seed_prior_spend(progress.total_cost_usd)
+            if progress.agent_spend_by_id:
+                cost_guard.seed_agent_spends(progress.agent_spend_by_id)
             logger.info(
                 "cost_guard seeded prior_spend=%.6f from checkpoint run_id=%s",
                 progress.total_cost_usd, progress.run_id,
             )
         logger.info(
-            "run_with_spec resuming run_id=%s from node=%d spec_version=%s",
+            "run_with_spec resuming run_id=%s ballast_index=%d spec_version=%s "
+            "(agent runtime may restart its step counter; ledger continues)",
             progress.run_id, node_offset, spec.version_hash,
         )
     else:
@@ -866,6 +869,16 @@ async def run_with_spec(
                     _compact_node(evicted, assessment.score, assessment.label, node_cost, verified)
                 )
 
+            # ── 5b. Cost enforcement (before persisting this node) ────────
+            if cost_guard is not None:
+                cost_guard.check_and_record(agent_id, node_cost)
+                snap = cost_guard.report()["agents"].get(agent_id)
+                if snap:
+                    progress.agent_spend_by_id[agent_id] = {
+                        "spent": float(snap["spent"]),
+                        "escalation_spent": float(snap["escalation_spent"]),
+                    }
+
             # ── 6. Checkpoint ───────────────────────────────────────────
             progress.completed_node_summaries.append(NodeSummary(
                 index=node_index,
@@ -884,10 +897,6 @@ async def run_with_spec(
             _ckpt_interval = max(1, active_spec.harness.checkpoint_every_n_nodes)
             if node_index % _ckpt_interval == 0:
                 progress.write()
-
-            # ── 6b. Cost enforcement ────────────────────────────────────
-            if cost_guard is not None:
-                cost_guard.check_and_record(agent_id, node_cost)
 
             # ── 7. OTel emit ─────────────────────────────────────────────
             if assessment.label != "PROGRESSING":
