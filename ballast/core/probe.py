@@ -22,6 +22,7 @@ from typing import Any
 from pydantic_ai import Agent
 
 from ballast.core.constants import HAIKU_MODEL
+from ballast.core.node_tools import duck_tool_info
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
@@ -80,45 +81,12 @@ class ProbePacket:
 
 
 # ---------------------------------------------------------------------------
-# _get_tool_info — minimal duck-typed extraction (no trajectory.py import)
+# _get_tool_info — delegates to node_tools (shared with evaluator)
 # ---------------------------------------------------------------------------
 
 def _get_tool_info(node: Any) -> tuple[str, dict, str]:
-    """Extract (tool_name, tool_args, content) from a pydantic-ai node.
-
-    Minimal version — covers direct-attr and parts-scan paths only.
-    Does not import from trajectory.py (circular: trajectory imports probe).
-    Returns ("", {}, "") if no tool call is found.
-    """
-    tool_name = ""
-    tool_args: dict = {}
-    content = ""
-
-    # Direct attributes (some pydantic-ai versions)
-    if hasattr(node, "tool_name") and hasattr(node, "args"):
-        tool_name = str(node.tool_name)
-        args_raw = getattr(node, "args", {})
-        tool_args = args_raw if isinstance(args_raw, dict) else {}
-
-    # Scan parts (ModelResponse with ToolCallPart)
-    if not tool_name:
-        for part in getattr(node, "parts", []) or []:
-            if type(part).__name__ in ("ToolCallPart", "ToolCall", "FunctionCall"):
-                t_name = str(getattr(part, "tool_name", getattr(part, "function_name", "")))
-                t_args = getattr(part, "args", getattr(part, "arguments", {}))
-                if t_name:
-                    tool_name = t_name
-                    tool_args = t_args if isinstance(t_args, dict) else {}
-                    break
-
-    # Content extraction
-    for attr in ("text", "content", "output"):
-        val = getattr(node, attr, None)
-        if val and isinstance(val, str):
-            content = val[:500]
-            break
-
-    return tool_name, tool_args, content
+    """Extract (tool_name, tool_args, content) from a pydantic-ai node."""
+    return duck_tool_info(node, content_max=500)
 
 
 # ---------------------------------------------------------------------------

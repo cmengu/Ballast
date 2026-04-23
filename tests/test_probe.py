@@ -77,6 +77,17 @@ class TestGetToolInfo:
         assert name == "read_file"
         assert args == {"path": "/tmp/y"}
 
+    def test_parts_json_string_args_parsed(self):
+        part = MagicMock()
+        part.__class__.__name__ = "ToolCallPart"
+        part.tool_name = "write_file"
+        part.args = '{"path": "/tmp/z", "content": "hi"}'
+        node = MagicMock(spec=["parts"])
+        node.parts = [part]
+        name, args, _ = _get_tool_info(node)
+        assert name == "write_file"
+        assert args == {"path": "/tmp/z", "content": "hi"}
+
 
 # ---------------------------------------------------------------------------
 # TestCallProbeAgent
