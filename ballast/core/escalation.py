@@ -121,6 +121,29 @@ class EscalationFailed(Exception):
 
 
 # ---------------------------------------------------------------------------
+# JSON flag coercion — LLMs may return string "false" (truthy in Python)
+# ---------------------------------------------------------------------------
+
+def _escalate_continue_up(result: dict) -> bool:
+    """True → escalate to next level; False → this level produced a resolution."""
+    if "escalate" not in result:
+        return True
+    v = result["escalate"]
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in ("false", "0", "no", "off"):
+            return False
+        if s in ("true", "1", "yes", "on"):
+            return True
+        return True
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v != 0
+    return True
+
+
+# ---------------------------------------------------------------------------
 # _call_level — async, never raises
 # ---------------------------------------------------------------------------
 
@@ -210,7 +233,7 @@ async def escalate(
 
     # Level 1 — Broker
     broker_result = await _call_level(_get_broker_agent(), packet)
-    if not broker_result.get("escalate", True):
+    if not _escalate_continue_up(broker_result):
         resolution = broker_result.get("resolution", "")
         if resolution:
             logger.info(
@@ -224,7 +247,7 @@ async def escalate(
 
     # Level 2 — CEO
     ceo_result = await _call_level(_get_ceo_agent(), packet)
-    if not ceo_result.get("escalate", True):
+    if not _escalate_continue_up(ceo_result):
         resolution = ceo_result.get("resolution", "")
         if resolution:
             logger.info(

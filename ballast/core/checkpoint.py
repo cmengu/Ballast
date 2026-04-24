@@ -120,11 +120,20 @@ class BallastProgress:
             return None
         for n in raw_summaries:
             if not isinstance(n, dict):
-                continue
+                logger.warning(
+                    "checkpoint_invalid_node_summary path=%s — rejecting load",
+                    path,
+                )
+                return None
             try:
                 summaries.append(NodeSummary(**n))
             except (TypeError, KeyError) as exc:
-                logger.warning("checkpoint_skip_node_summary path=%s: %s", path, exc)
+                logger.warning(
+                    "checkpoint_bad_node_summary path=%s: %s — rejecting load",
+                    path,
+                    exc,
+                )
+                return None
         data["completed_node_summaries"] = summaries
         if "agent_spend_by_id" not in data or not isinstance(
             data.get("agent_spend_by_id"), dict

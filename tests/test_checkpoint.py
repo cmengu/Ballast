@@ -2,6 +2,9 @@
 
 All tests use tmp_path fixture — never write to project root.
 """
+import json
+from pathlib import Path
+
 import pytest
 
 from ballast.core.checkpoint import BallastProgress, NodeSummary
@@ -93,6 +96,17 @@ def test_read_returns_none_on_corrupt_json(tmp_path):
     path = tmp_path / "bad.json"
     path.write_text("not valid json{{{", encoding="utf-8")
     assert BallastProgress.read(str(path)) is None
+
+
+def test_read_returns_none_on_bad_node_summary(tmp_path):
+    path = str(tmp_path / "progress.json")
+    p = _make_progress()
+    p.write(path)
+    raw = Path(path).read_text(encoding="utf-8")
+    data = json.loads(raw)
+    data["completed_node_summaries"] = [{"index": "not-int"}]
+    Path(path).write_text(json.dumps(data), encoding="utf-8")
+    assert BallastProgress.read(path) is None
 
 
 def test_spec_transitions_round_trip(tmp_path):

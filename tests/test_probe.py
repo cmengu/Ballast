@@ -7,7 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ballast.core.probe import ProbePacket, _call_probe_agent, _get_tool_info, verify_node_claim
+from ballast.core.probe import (
+    ProbePacket,
+    _call_probe_agent,
+    _coerce_verified,
+    _get_tool_info,
+    verify_node_claim,
+)
 from ballast.core.spec import SpecModel
 
 
@@ -44,6 +50,20 @@ def _node_with_tool(tool_name: str, args: dict, content: str = "") -> MagicMock:
     node.args = args
     node.content = content
     return node
+
+
+# ---------------------------------------------------------------------------
+# _coerce_verified
+# ---------------------------------------------------------------------------
+
+def test_coerce_verified_string_false_is_false():
+    assert _coerce_verified("false") is False
+    assert _coerce_verified("FALSE") is False
+
+
+def test_coerce_verified_bool_passthrough():
+    assert _coerce_verified(True) is True
+    assert _coerce_verified(False) is False
 
 
 # ---------------------------------------------------------------------------

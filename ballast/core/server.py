@@ -19,11 +19,11 @@ app = FastAPI()
 
 _current_spec: dict[str, dict] = {}  # job_id → SpecModel.model_dump()
 
-# When set, POST /spec/.../update requires header X-Ballast-Token matching this value.
+# When set, GET/POST spec routes require header X-Ballast-Token matching this value.
 _SPEC_SERVER_TOKEN = os.environ.get("BALLAST_SPEC_SERVER_TOKEN", "").strip()
 
 
-def _require_update_token(x_ballast_token: Optional[str]) -> None:
+def _require_token(x_ballast_token: Optional[str]) -> None:
     if not _SPEC_SERVER_TOKEN:
         return
     if x_ballast_token != _SPEC_SERVER_TOKEN:
@@ -31,8 +31,12 @@ def _require_update_token(x_ballast_token: Optional[str]) -> None:
 
 
 @app.get("/spec/{job_id}/current")
-def get_spec(job_id: str) -> dict:
+def get_spec(
+    job_id: str,
+    x_ballast_token: Optional[str] = Header(None, alias="X-Ballast-Token"),
+) -> dict:
     """Return the current spec for this job, or {} if not yet set."""
+    _require_token(x_ballast_token)
     return _current_spec.get(job_id, {})
 
 
@@ -43,6 +47,6 @@ def update_spec(
     x_ballast_token: Optional[str] = Header(None, alias="X-Ballast-Token"),
 ) -> dict:
     """Store the new spec for this job. Returns version_hash for confirmation."""
-    _require_update_token(x_ballast_token)
+    _require_token(x_ballast_token)
     _current_spec[job_id] = spec.model_dump()
     return {"status": "ok", "version_hash": spec.version_hash}

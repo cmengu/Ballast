@@ -30,6 +30,19 @@ logger = logging.getLogger(__name__)
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```")
 
 
+def _coerce_verified(val: object) -> bool:
+    """Parse probe JSON verified field; strings like 'false' must not be truthy."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("false", "0", "no", "off"):
+            return False
+        if s in ("true", "1", "yes", "on"):
+            return True
+    return True
+
+
 def _extract_json(raw: str) -> str:
     """Strip markdown code fences that LLMs sometimes wrap JSON in."""
     m = _JSON_FENCE_RE.search(raw)
@@ -120,9 +133,11 @@ async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
         result = await agent.run(prompt)
         raw = result.output if hasattr(result, "output") else str(result)
         parsed = json.loads(_extract_json(raw))
-        # Normalise: ensure both keys exist
+        if not isinstance(parsed, dict):
+            return {"verified": True, "note": "probe_error: non-object JSON"}
+        vraw = parsed.get("verified", True)
         return {
-            "verified": bool(parsed.get("verified", True)),
+            "verified": _coerce_verified(vraw),
             "note": str(parsed.get("note", "")),
         }
     except Exception as exc:  # noqa: BLE001

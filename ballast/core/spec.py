@@ -306,6 +306,8 @@ def parse_spec(path: str) -> SpecModel:
             text = f.read()
     except FileNotFoundError:
         raise SpecParseError(f"spec file not found: {path}")
+    except OSError as exc:
+        raise SpecParseError(f"cannot read spec file {path!r}: {exc}") from exc
 
     def _section(name: str) -> str:
         """Text between ## name and the next ## heading (or EOF). Case-insensitive."""

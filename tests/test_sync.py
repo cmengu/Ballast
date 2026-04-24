@@ -81,12 +81,20 @@ def test_post_rejects_without_token_when_configured(monkeypatch):
     c = TestClient(srv.app)
     r = c.post("/spec/job-001/update", json=spec.model_dump())
     assert r.status_code == 401
+    r_get = c.get("/spec/job-001/current")
+    assert r_get.status_code == 401
     r2 = c.post(
         "/spec/job-001/update",
         json=spec.model_dump(),
         headers={"X-Ballast-Token": "secret"},
     )
     assert r2.status_code == 200
+    r_get_ok = c.get(
+        "/spec/job-001/current",
+        headers={"X-Ballast-Token": "secret"},
+    )
+    assert r_get_ok.status_code == 200
+    assert r_get_ok.json().get("version_hash") == spec.version_hash
 
 
 # ---------------------------------------------------------------------------
