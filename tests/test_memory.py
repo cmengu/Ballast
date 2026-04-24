@@ -52,6 +52,30 @@ def test_decay_negative_elapsed_returns_one():
     assert _decay_factor(86400.0, -100) == 1.0
 
 
+def test_scope_path_rejects_path_segments():
+    from ballast.core.memory import _scope_path
+
+    # '/' checked before '..'
+    with pytest.raises(ValueError, match="separator"):
+        _scope_path("evil/../scope")
+    with pytest.raises(ValueError, match="\\.\\."):
+        _scope_path("prefix..suffix")
+    with pytest.raises(ValueError, match="separator"):
+        _scope_path("a/b")
+
+
+def test_update_domain_threshold_no_deadlock(tmp_path, monkeypatch):
+    """Regression: must not call get_domain_threshold while holding the same FileLock."""
+    import ballast.core.memory as mem
+
+    monkeypatch.setattr(mem, "MEMORY_DIR", tmp_path)
+    mem.update_domain_threshold("coding", clarification_asked=False, run_succeeded=True, max_ambiguity_score=0.7)
+    t1 = mem.get_domain_threshold("coding")
+    mem.update_domain_threshold("coding", clarification_asked=False, run_succeeded=True, max_ambiguity_score=0.7)
+    t2 = mem.get_domain_threshold("coding")
+    assert isinstance(t1, float) and isinstance(t2, float)
+
+
 # ---------------------------------------------------------------------------
 # recall — empty store behavior
 # ---------------------------------------------------------------------------

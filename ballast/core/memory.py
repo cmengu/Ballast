@@ -96,8 +96,21 @@ def _decay_factor(half_life_seconds: float, elapsed_seconds: float) -> float:
 
 
 def _scope_path(scope: str) -> Path:
-    """Sanitise scope string into a safe filename."""
-    safe = scope.replace(":", "_").replace("/", "_")
+    """Map scope to a single file under MEMORY_DIR (no path traversal)."""
+    s = str(scope).strip()
+    if not s:
+        raise ValueError("memory scope must be non-empty")
+    if "\x00" in s:
+        raise ValueError("memory scope must not contain NUL")
+    sep = os.sep
+    alt = os.altsep
+    if sep in s or (alt and alt in s):
+        raise ValueError("memory scope must not contain path separators")
+    if ".." in s:
+        raise ValueError("memory scope must not contain '..'")
+    safe = s.replace(":", "_")
+    if not safe or safe in (".", ".."):
+        raise ValueError("memory scope is invalid")
     return MEMORY_DIR / f"{safe}.json"
 
 
@@ -114,6 +127,7 @@ def _empty_scope_data() -> dict:
         "semantic_profile": "",
         "run_count": 0,
         "last_consolidated": 0.0,
+        "last_consolidated_synthesis_count": 0,
     }
 
 
@@ -395,7 +409,11 @@ def consolidate(scope: str) -> bool:
             if not r.get("is_trial", False) and r.get("success", True)
         ]
 
-        if len(synthesis_runs) == 0 or len(synthesis_runs) % CONSOLIDATE_EVERY != 0:
+        syn_count = len(synthesis_runs)
+        if syn_count == 0 or syn_count % CONSOLIDATE_EVERY != 0:
+            return False
+        last_done = int(data.get("last_consolidated_synthesis_count", 0))
+        if syn_count <= last_done:
             return False
 
         recent_runs = synthesis_runs[-20:]
@@ -442,6 +460,7 @@ def consolidate(scope: str) -> bool:
             )
             data["semantic_profile"] = out.profile.strip()
             data["last_consolidated"] = time.time()
+            data["last_consolidated_synthesis_count"] = syn_count
             atomic_write_json(path, data)
             return True
         except Exception as exc:
@@ -477,8 +496,7 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
             if changed:
                 atomic_write_json(path, data)
     except Exception as exc:
-        import logging as _log
-        _log.getLogger(__name__).warning("patch_quirk failed scope=%r: %s", scope, exc)
+        logger.warning("patch_quirk failed scope=%r: %s", scope, exc)
 
 
 def memory_report(scope: str) -> str:
@@ -621,21 +639,26 @@ def update_domain_threshold(
     path = _scope_path(f"{_THRESHOLD_KEY_PREFIX}{domain}")
     try:
         with _scope_lock(path):
-            current = get_domain_threshold(domain)
+            if path.exists():
+                try:
+                    raw = json.loads(path.read_text(encoding="utf-8"))
+                    current = float(raw.get("threshold", _DEFAULT_THRESHOLD))
+                except (json.JSONDecodeError, OSError, ValueError):
+                    current = _DEFAULT_THRESHOLD
+            else:
+                current = _DEFAULT_THRESHOLD
+
             if not clarification_asked and run_succeeded:
-                # Inferred spec worked — relax threshold upward
                 updated = current + 0.05 * (max_ambiguity_score - current)
             elif not clarification_asked and not run_succeeded:
-                # Should have asked — tighten threshold downward
                 updated = current - 0.10 * current
             else:
-                # Clarification was asked — no update signal
                 updated = current
 
             updated = round(max(0.20, min(0.90, updated)), 4)
-
             data = {"threshold": updated, "domain": domain}
             atomic_write_json(path, data)
     except Exception as exc:
-        import logging as _log
-        _log.getLogger(__name__).warning("update_domain_threshold failed domain=%r: %s", domain, exc)
+        logger.warning(
+            "update_domain_threshold failed domain=%r: %s", domain, exc
+        )
