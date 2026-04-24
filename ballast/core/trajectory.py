@@ -33,6 +33,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from ballast.adapters.otel import emit_drift_span
 from ballast.core.constants import SONNET_MODEL
+from ballast.core.node_tools import extract_node_info as _extract_node_info
 from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
@@ -110,110 +111,6 @@ def _get_judge_client() -> "anthropic.Anthropic":
     if _judge_client is None:
         _judge_client = anthropic.Anthropic()
     return _judge_client
-
-
-# ---------------------------------------------------------------------------
-# Node info extractor — duck-typed for pydantic-ai version resilience
-# ---------------------------------------------------------------------------
-
-def _extract_node_info(node: Any) -> tuple[str, str, dict]:
-    """Extract (node_type_name, content, tool_info) from a pydantic-ai Agent.iter node.
-
-    Uses duck typing via hasattr and class name substring checks.
-    This makes it resilient to pydantic-ai version differences in class hierarchy.
-
-    Returns:
-        node_type:  type(node).__name__
-        content:    up to 1000 chars of extractable text (for LLM scorers)
-        tool_info:  {'tool_name': str, 'tool_args': dict} or {} if not a tool call
-    """
-    node_type = type(node).__name__
-    content = ""
-    tool_info: dict = {}
-
-    # --- Tool call detection ---
-    # Direct attributes (some pydantic-ai versions expose tool_name at top level)
-    if hasattr(node, "tool_name") and hasattr(node, "args"):
-        args_raw = getattr(node, "args", {})
-        tool_info = {
-            "tool_name": str(node.tool_name),
-            "tool_args": args_raw if isinstance(args_raw, dict) else {},
-        }
-
-    # Scan parts (ModelResponse may contain ToolCallPart objects)
-    for container_attr in ("parts", "messages"):
-        container = getattr(node, container_attr, None) or []
-        if not hasattr(container, "__iter__"):
-            continue
-        for part in container:
-            part_type_name = type(part).__name__
-            if part_type_name in ("ToolCallPart", "ToolCall", "FunctionCall"):
-                t_name = str(
-                    getattr(part, "tool_name", getattr(part, "function_name", ""))
-                )
-                t_args = getattr(part, "args", getattr(part, "arguments", {}))
-                if t_name and not tool_info:
-                    tool_info = {
-                        "tool_name": t_name,
-                        "tool_args": t_args if isinstance(t_args, dict) else {},
-                    }
-
-    # Scan nested request/response wrappers
-    for wrapper_attr in ("request", "response"):
-        wrapper = getattr(node, wrapper_attr, None)
-        if not wrapper:
-            continue
-        for container_attr in ("parts", "messages"):
-            container = getattr(wrapper, container_attr, None) or []
-            if not hasattr(container, "__iter__"):
-                continue
-            for part in container:
-                part_type_name = type(part).__name__
-                if part_type_name in ("ToolCallPart", "ToolCall", "FunctionCall"):
-                    t_name = str(
-                        getattr(part, "tool_name", getattr(part, "function_name", ""))
-                    )
-                    t_args = getattr(part, "args", getattr(part, "arguments", {}))
-                    if t_name and not tool_info:
-                        tool_info = {
-                            "tool_name": t_name,
-                            "tool_args": t_args if isinstance(t_args, dict) else {},
-                        }
-
-    # --- Content extraction (for LLM scorers) ---
-    for attr in ("text", "content", "output"):
-        val = getattr(node, attr, None)
-        if val and isinstance(val, str):
-            content = val[:1000]
-            break
-
-    if not content:
-        for container_attr in ("parts", "messages"):
-            container = getattr(node, container_attr, None) or []
-            if not hasattr(container, "__iter__"):
-                continue
-            texts = []
-            for part in container:
-                for attr in ("text", "content"):
-                    val = getattr(part, attr, None)
-                    if val and isinstance(val, str):
-                        texts.append(val)
-            if texts:
-                content = "\n".join(texts)[:1000]
-                break
-
-    if not content:
-        for wrapper_attr in ("response", "request"):
-            wrapper = getattr(node, wrapper_attr, None)
-            if not wrapper:
-                continue
-            for attr in ("text", "content"):
-                val = getattr(wrapper, attr, None)
-                if val and isinstance(val, str):
-                    content = val[:1000]
-                    break
-
-    return node_type, content, tool_info
 
 
 # ---------------------------------------------------------------------------
@@ -760,6 +657,8 @@ async def run_with_spec(
         node_offset = 0
 
     full_window: list = []
+    # Parallel to full_window: per-node (drift_score, label, cost_usd, verified) at eviction.
+    full_window_meta: list[tuple[float, str, float, bool]] = []
     compact_history: list[dict] = []
     node_index = node_offset
     _cost_usd_warned = False
@@ -772,21 +671,34 @@ async def run_with_spec(
             if poller and node_index % _poll_interval == 0:
                 new_spec = poller.poll()
                 if new_spec:
-                    delta = active_spec.diff(new_spec)
-                    active_spec = new_spec
-                    agent_run.ctx.state.message_history.append(
-                        ModelRequest(parts=[UserPromptPart(content=delta.as_injection())])
-                    )
-                    progress.active_spec_hash = active_spec.version_hash
-                    progress.spec_transitions.append({
-                        "at_node": node_index,
-                        "from_hash": delta.from_hash,
-                        "to_hash": delta.to_hash,
-                    })
-                    logger.info(
-                        "spec_updated from=%s to=%s at_node=%d run_id=%s",
-                        delta.from_hash[:8], delta.to_hash[:8], node_index, run_id,
-                    )
+                    if not is_locked(new_spec):
+                        logger.warning(
+                            "spec_poll_rejected_unlocked at_node=%d run_id=%s — "
+                            "keeping active spec",
+                            node_index,
+                            run_id,
+                        )
+                    else:
+                        delta = active_spec.diff(new_spec)
+                        active_spec = new_spec
+                        agent_run.ctx.state.message_history.append(
+                            ModelRequest(
+                                parts=[UserPromptPart(content=delta.as_injection())]
+                            )
+                        )
+                        progress.active_spec_hash = active_spec.version_hash
+                        progress.spec_transitions.append({
+                            "at_node": node_index,
+                            "from_hash": delta.from_hash,
+                            "to_hash": delta.to_hash,
+                        })
+                        logger.info(
+                            "spec_updated from=%s to=%s at_node=%d run_id=%s",
+                            delta.from_hash[:8],
+                            delta.to_hash[:8],
+                            node_index,
+                            run_id,
+                        )
 
             # ── 2. Cascade drift score ──────────────────────────────────
             assessment = score_drift(node, full_window, active_spec, compact_history)
@@ -862,12 +774,15 @@ async def run_with_spec(
                     progress.total_violations += 1
 
             # ── 5. Context window management ────────────────────────────
+            _win_sz = max(1, active_spec.harness.context_window_size)
             full_window.append(node)
-            if len(full_window) > active_spec.harness.context_window_size:
+            full_window_meta.append(
+                (assessment.score, assessment.label, node_cost, verified)
+            )
+            if len(full_window) > _win_sz:
                 evicted = full_window.pop(0)
-                compact_history.append(
-                    _compact_node(evicted, assessment.score, assessment.label, node_cost, verified)
-                )
+                ev_s, ev_l, ev_c, ev_v = full_window_meta.pop(0)
+                compact_history.append(_compact_node(evicted, ev_s, ev_l, ev_c, ev_v))
 
             # ── 5b. Cost enforcement (before persisting this node) ────────
             if cost_guard is not None:
