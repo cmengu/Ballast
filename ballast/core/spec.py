@@ -294,7 +294,8 @@ def parse_spec(path: str) -> SpecModel:
     """Read a spec.md file and return a draft SpecModel (locked_at='', version_hash='').
 
     Parses the ## intent, ## success criteria, ## constraints,
-    ## escalation threshold, and ## tools allowed sections.
+    ## irreversible actions, ## scope, ## escalation threshold,
+    and ## tools allowed sections.
 
     Raises SpecParseError if:
         - file not found
@@ -341,6 +342,8 @@ def parse_spec(path: str) -> SpecModel:
 
     constraints = _bullets(_section("constraints"))
     allowed_tools = _bullets(_section("tools allowed"))
+    irreversible_actions = _bullets(_section("irreversible actions"))
+    scope = _section("scope")
 
     drift_threshold = 0.4
     escalation_timeout = 300
@@ -363,18 +366,23 @@ def parse_spec(path: str) -> SpecModel:
                     except ValueError:
                         pass
 
-    return SpecModel(
-        version_hash="",
-        intent=intent,
-        success_criteria=success_criteria,
-        constraints=constraints,
-        irreversible_actions=[],
-        drift_threshold=drift_threshold,
-        allowed_tools=allowed_tools,
-        scope="",
-        locked_at="",
-        harness=HarnessProfile(escalation_timeout_seconds=escalation_timeout),
-    )
+    try:
+        return SpecModel(
+            version_hash="",
+            intent=intent,
+            success_criteria=success_criteria,
+            constraints=constraints,
+            irreversible_actions=irreversible_actions,
+            drift_threshold=drift_threshold,
+            allowed_tools=allowed_tools,
+            scope=scope,
+            locked_at="",
+            harness=HarnessProfile(escalation_timeout_seconds=escalation_timeout),
+        )
+    except Exception as exc:
+        raise SpecParseError(
+            f"spec.md produced an invalid SpecModel: {exc}"
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
