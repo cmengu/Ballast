@@ -97,9 +97,14 @@ async def run_with_live_spec(
             )
 
             if on_node:
-                coro = on_node(node_index, node, active_spec, delta)
-                if inspect.isawaitable(coro):
-                    await coro
+                try:
+                    coro = on_node(node_index, node, active_spec, delta)
+                    if inspect.isawaitable(coro):
+                        await coro
+                except Exception as _cb_exc:  # noqa: BLE001
+                    logger.warning(
+                        "on_node callback raised at node=%d: %s", node_index, _cb_exc
+                    )
 
             node_index += 1
 

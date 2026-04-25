@@ -17,6 +17,7 @@ from ballast.core.spec import SpecModel
 
 app = FastAPI()
 
+_MAX_JOB_SLOTS = 500  # cap to prevent unbounded memory growth on long-lived servers
 _current_spec: dict[str, dict] = {}  # job_id → SpecModel.model_dump()
 
 # When set, GET/POST spec routes require header X-Ballast-Token matching this value.
@@ -48,5 +49,9 @@ def update_spec(
 ) -> dict:
     """Store the new spec for this job. Returns version_hash for confirmation."""
     _require_token(x_ballast_token)
+    if job_id not in _current_spec and len(_current_spec) >= _MAX_JOB_SLOTS:
+        # Evict the oldest entry to prevent unbounded memory growth.
+        oldest_key = next(iter(_current_spec))
+        del _current_spec[oldest_key]
     _current_spec[job_id] = spec.model_dump()
     return {"status": "ok", "version_hash": spec.version_hash}
