@@ -20,7 +20,10 @@ Interception: pydantic-ai Agent.iter node boundaries (duck-typed for version res
 """
 from __future__ import annotations
 
+import asyncio
+import functools
 import logging
+import math
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -384,6 +387,9 @@ def score_drift(
     aggregate = min(tool_score, constraint_score, intent_score)
 
     # ── Label assignment (Layer 2 when ambiguous and harness allows) ───────
+    # Layer 2 is triggered when aggregate is in the ambiguous zone.
+    # evaluate_node uses a synchronous Anthropic client; callers in an async
+    # event loop must offload it via asyncio.to_thread (see _score_drift_async).
     eval_note = ""
     if aggregate >= 0.85:
         label = "PROGRESSING"
@@ -664,160 +670,190 @@ async def run_with_spec(
     _cost_usd_warned = False
 
     async with agent.iter(task) as agent_run:
-        async for node in agent_run:
+        try:
+            async for node in agent_run:
 
-            # ── 1. Poll for spec update ─────────────────────────────────
-            _poll_interval = max(1, active_spec.harness.spec_poll_interval_nodes)
-            if poller and node_index % _poll_interval == 0:
-                new_spec = poller.poll()
-                if new_spec:
-                    if not is_locked(new_spec):
-                        logger.warning(
-                            "spec_poll_rejected_unlocked at_node=%d run_id=%s — "
-                            "keeping active spec",
-                            node_index,
-                            run_id,
-                        )
-                    else:
-                        delta = active_spec.diff(new_spec)
-                        active_spec = new_spec
-                        agent_run.ctx.state.message_history.append(
-                            ModelRequest(
-                                parts=[UserPromptPart(content=delta.as_injection())]
+                # ── 1. Poll for spec update ─────────────────────────────────
+                _poll_interval = max(1, active_spec.harness.spec_poll_interval_nodes)
+                if poller and node_index % _poll_interval == 0:
+                    new_spec = poller.poll()
+                    if new_spec:
+                        if not is_locked(new_spec):
+                            logger.warning(
+                                "spec_poll_rejected_unlocked at_node=%d run_id=%s — "
+                                "keeping active spec",
+                                node_index,
+                                run_id,
                             )
+                        else:
+                            delta = active_spec.diff(new_spec)
+                            active_spec = new_spec
+                            agent_run.ctx.state.message_history.append(
+                                ModelRequest(
+                                    parts=[UserPromptPart(content=delta.as_injection())]
+                                )
+                            )
+                            progress.active_spec_hash = active_spec.version_hash
+                            progress.spec_transitions.append({
+                                "at_node": node_index,
+                                "from_hash": delta.from_hash,
+                                "to_hash": delta.to_hash,
+                            })
+                            logger.info(
+                                "spec_updated from=%s to=%s at_node=%d run_id=%s",
+                                delta.from_hash[:8],
+                                delta.to_hash[:8],
+                                node_index,
+                                run_id,
+                            )
+
+                # ── 2. Cascade drift score ──────────────────────────────────
+                # score_drift's Layer-2 judge makes a synchronous Anthropic call.
+                # Offload to a thread pool so we never block the event loop.
+                assessment = await asyncio.to_thread(
+                    functools.partial(
+                        score_drift, node, full_window, active_spec, compact_history
+                    )
+                )
+
+                # ── 3. Environment probe ────────────────────────────────────
+                verified = True
+                if assessment.label == "PROGRESSING":
+                    verified, probe_note = await verify_node_claim(
+                        node, assessment.label, active_spec,
+                    )
+                    if not verified:
+                        assessment = replace(
+                            assessment,
+                            label="VIOLATED",
+                            score=0.0,
+                            rationale=f"probe failed: {probe_note}",
                         )
-                        progress.active_spec_hash = active_spec.version_hash
-                        progress.spec_transitions.append({
-                            "at_node": node_index,
-                            "from_hash": delta.from_hash,
-                            "to_hash": delta.to_hash,
-                        })
-                        logger.info(
-                            "spec_updated from=%s to=%s at_node=%d run_id=%s",
-                            delta.from_hash[:8],
-                            delta.to_hash[:8],
-                            node_index,
-                            run_id,
+                        logger.warning(
+                            "probe_failed node=%d tool=%s note=%s run_id=%s",
+                            node_index, assessment.tool_name, probe_note, run_id,
                         )
 
-            # ── 2. Cascade drift score ──────────────────────────────────
-            assessment = score_drift(node, full_window, active_spec, compact_history)
+                # ── 4. Drift response ───────────────────────────────────────
+                if hasattr(node, "cost_usd"):
+                    raw_cost = node.cost_usd
+                    try:
+                        node_cost = float(raw_cost)
+                    except (TypeError, ValueError):
+                        node_cost = 0.0
+                        logger.warning(
+                            "cost_usd_invalid node_type=%s value=%r node_index=%d run_id=%s"
+                            " — treating as 0.0",
+                            type(node).__name__, raw_cost, node_index, run_id,
+                        )
+                    if math.isnan(node_cost) or math.isinf(node_cost) or node_cost < 0:
+                        logger.warning(
+                            "cost_usd_out_of_range node_type=%s value=%r node_index=%d"
+                            " run_id=%s — clamping to 0.0",
+                            type(node).__name__, node_cost, node_index, run_id,
+                        )
+                        node_cost = 0.0
+                else:
+                    node_cost = 0.0
+                    if cost_guard is not None and not _cost_usd_warned:
+                        logger.warning(
+                            "cost_usd_missing node_type=%s node_index=%d run_id=%s"
+                            " — cost guard is active but node exposes no cost_usd;"
+                            " cap enforcement will not fire",
+                            type(node).__name__, node_index, run_id,
+                        )
+                        _cost_usd_warned = True
 
-            # ── 3. Environment probe ────────────────────────────────────
-            verified = True
-            if assessment.label == "PROGRESSING":
-                verified, probe_note = await verify_node_claim(
-                    node, assessment.label, active_spec,
-                )
-                if not verified:
-                    assessment = replace(
-                        assessment,
-                        label="VIOLATED",
-                        score=0.0,
-                        rationale=f"probe failed: {probe_note}",
-                    )
-                    logger.warning(
-                        "probe_failed node=%d tool=%s note=%s run_id=%s",
-                        node_index, assessment.tool_name, probe_note, run_id,
-                    )
-
-            # ── 4. Drift response ───────────────────────────────────────
-            if hasattr(node, "cost_usd"):
-                node_cost = float(node.cost_usd)
-            else:
-                node_cost = 0.0
-                if cost_guard is not None and not _cost_usd_warned:
-                    logger.warning(
-                        "cost_usd_missing node_type=%s node_index=%d run_id=%s"
-                        " — cost guard is active but node exposes no cost_usd;"
-                        " cap enforcement will not fire",
-                        type(node).__name__, node_index, run_id,
-                    )
-                    _cost_usd_warned = True
-
-            if assessment.label == "VIOLATED_IRREVERSIBLE":
-                try:
-                    resolution = await escalate(
-                        assessment,
-                        active_spec,
-                        compact_history + full_window,
-                        run_id=run_id,
-                        node_index=node_index,
-                    )
-                    agent_run.ctx.state.message_history.append(
-                        ModelRequest(parts=[UserPromptPart(content=resolution)])
-                    )
-                except EscalationFailed:
-                    progress.write()
-                    raise HardInterrupt(assessment, active_spec, node_index)
-                progress.total_violations += 1
-                progress.last_escalation = datetime.now(timezone.utc).isoformat()
-                logger.warning(
-                    "irreversible_action_detected node=%d tool=%s spec_version=%s run_id=%s",
-                    node_index,
-                    assessment.tool_name,
-                    active_spec.version_hash,
-                    run_id,
-                )
-
-            elif assessment.score < active_spec.drift_threshold:
-                correction = build_correction(assessment, active_spec, node_index)
-                agent_run.ctx.state.message_history.append(
-                    ModelRequest(parts=[UserPromptPart(content=correction)])
-                )
-                logger.warning(
-                    "drift_detected node=%d score=%.3f label=%s spec_version=%s run_id=%s",
-                    node_index, assessment.score, assessment.label, active_spec.version_hash, run_id,
-                )
-                progress.total_drift_events += 1
-                if assessment.label == "VIOLATED":
+                if assessment.label == "VIOLATED_IRREVERSIBLE":
+                    try:
+                        resolution = await escalate(
+                            assessment,
+                            active_spec,
+                            compact_history + full_window,
+                            run_id=run_id,
+                            node_index=node_index,
+                        )
+                        agent_run.ctx.state.message_history.append(
+                            ModelRequest(parts=[UserPromptPart(content=resolution)])
+                        )
+                    except EscalationFailed:
+                        progress.write()
+                        raise HardInterrupt(assessment, active_spec, node_index)
                     progress.total_violations += 1
+                    progress.last_escalation = datetime.now(timezone.utc).isoformat()
+                    logger.warning(
+                        "irreversible_action_detected node=%d tool=%s spec_version=%s run_id=%s",
+                        node_index,
+                        assessment.tool_name,
+                        active_spec.version_hash,
+                        run_id,
+                    )
 
-            # ── 5. Context window management ────────────────────────────
-            _win_sz = max(1, active_spec.harness.context_window_size)
-            full_window.append(node)
-            full_window_meta.append(
-                (assessment.score, assessment.label, node_cost, verified)
-            )
-            if len(full_window) > _win_sz:
-                evicted = full_window.pop(0)
-                ev_s, ev_l, ev_c, ev_v = full_window_meta.pop(0)
-                compact_history.append(_compact_node(evicted, ev_s, ev_l, ev_c, ev_v))
+                elif assessment.score < active_spec.drift_threshold:
+                    correction = build_correction(assessment, active_spec, node_index)
+                    agent_run.ctx.state.message_history.append(
+                        ModelRequest(parts=[UserPromptPart(content=correction)])
+                    )
+                    logger.warning(
+                        "drift_detected node=%d score=%.3f label=%s spec_version=%s run_id=%s",
+                        node_index, assessment.score, assessment.label, active_spec.version_hash, run_id,
+                    )
+                    progress.total_drift_events += 1
+                    if assessment.label == "VIOLATED":
+                        progress.total_violations += 1
 
-            # ── 5b. Cost enforcement (before persisting this node) ────────
-            if cost_guard is not None:
-                cost_guard.check_and_record(agent_id, node_cost)
-                snap = cost_guard.report()["agents"].get(agent_id)
-                if snap:
-                    progress.agent_spend_by_id[agent_id] = {
-                        "spent": float(snap["spent"]),
-                        "escalation_spent": float(snap["escalation_spent"]),
-                    }
+                # ── 5. Context window management ────────────────────────────
+                _win_sz = max(1, active_spec.harness.context_window_size)
+                full_window.append(node)
+                full_window_meta.append(
+                    (assessment.score, assessment.label, node_cost, verified)
+                )
+                if len(full_window) > _win_sz:
+                    evicted = full_window.pop(0)
+                    ev_s, ev_l, ev_c, ev_v = full_window_meta.pop(0)
+                    compact_history.append(_compact_node(evicted, ev_s, ev_l, ev_c, ev_v))
 
-            # ── 6. Checkpoint ───────────────────────────────────────────
-            progress.completed_node_summaries.append(NodeSummary(
-                index=node_index,
-                tool_name=assessment.tool_name,
-                label=assessment.label,
-                drift_score=assessment.score,
-                cost_usd=node_cost,
-                verified=verified,
-                spec_hash=active_spec.version_hash,   # active hash — NOT dispatch hash
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            ))
-            progress.total_cost_usd += node_cost
-            progress.updated_at = datetime.now(timezone.utc).isoformat()
-            if assessment.label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
-                progress.last_clean_node_index = node_index
-            _ckpt_interval = max(1, active_spec.harness.checkpoint_every_n_nodes)
-            if node_index % _ckpt_interval == 0:
-                progress.write()
+                # ── 5b. Cost enforcement (before persisting this node) ────────
+                if cost_guard is not None:
+                    cost_guard.check_and_record(agent_id, node_cost)
+                    snap = cost_guard.report()["agents"].get(agent_id)
+                    if snap:
+                        progress.agent_spend_by_id[agent_id] = {
+                            "spent": float(snap["spent"]),
+                            "escalation_spent": float(snap["escalation_spent"]),
+                        }
 
-            # ── 7. OTel emit ─────────────────────────────────────────────
-            if assessment.label != "PROGRESSING":
-                emit_drift_span(assessment, active_spec, node_index, run_id, node_cost)
+                # ── 6. Checkpoint ───────────────────────────────────────────
+                progress.completed_node_summaries.append(NodeSummary(
+                    index=node_index,
+                    tool_name=assessment.tool_name,
+                    label=assessment.label,
+                    drift_score=assessment.score,
+                    cost_usd=node_cost,
+                    verified=verified,
+                    spec_hash=active_spec.version_hash,   # active hash — NOT dispatch hash
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                ))
+                progress.total_cost_usd += node_cost
+                progress.updated_at = datetime.now(timezone.utc).isoformat()
+                if assessment.label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
+                    progress.last_clean_node_index = node_index
+                _ckpt_interval = max(1, active_spec.harness.checkpoint_every_n_nodes)
+                if node_index % _ckpt_interval == 0:
+                    progress.write()
 
-            node_index += 1
+                # ── 7. OTel emit ─────────────────────────────────────────────
+                if assessment.label != "PROGRESSING":
+                    emit_drift_span(assessment, active_spec, node_index, run_id, node_cost)
+
+                node_index += 1
+
+        except (HardInterrupt, KeyboardInterrupt, GeneratorExit):
+            progress.write()
+            raise
+        except Exception:
+            progress.write()
+            raise
 
     progress.is_complete = True
     progress.write()
