@@ -89,11 +89,24 @@ class AgentCostGuard:
     _spent: float = field(default=0.0, init=False, repr=False)
     _escalation_spent: float = field(default=0.0, init=False, repr=False)
 
+    @staticmethod
+    def _validate_amount(amount: float, name: str = "amount") -> float:
+        """Coerce and validate a cost amount. Raises ValueError for unsafe values."""
+        import math as _math
+        v = float(amount)
+        if _math.isnan(v) or _math.isinf(v) or v < 0:
+            raise ValueError(
+                f"cost {name} must be a finite non-negative number, got {amount!r}"
+            )
+        return v
+
     def check(self, estimated: float, is_escalation: bool = False) -> None:
         """Raise if recording `estimated` would exceed this agent's cap.
 
         Does NOT modify state. Always call before record().
+        Raises ValueError for NaN, infinite, or negative values.
         """
+        estimated = self._validate_amount(estimated, "estimated")
         if is_escalation:
             if self._escalation_spent + estimated > self.escalation_pool_usd:
                 raise EscalationBudgetExceeded(
@@ -180,8 +193,14 @@ class RunCostGuard:
         Order: global hard_cap_usd checked first → per-agent cap second.
         HardCapExceeded fires even if the agent-level cap would allow it.
         Raises KeyError if agent_id was not registered via register().
+        Raises ValueError for NaN, infinite, or negative cost values.
         Does NOT modify state.
         """
+        if agent_id not in self._agents:
+            raise KeyError(
+                f"agent_id {agent_id!r} was never registered; "
+                "call RunCostGuard.register() before check_and_record()"
+            )
         if self._total + estimated > self.hard_cap_usd:
             raise HardCapExceeded(self._total, estimated, self.hard_cap_usd)
         self._agents[agent_id].check(estimated, is_escalation)
