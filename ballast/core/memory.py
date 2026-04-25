@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 import uuid
 
 import anthropic
-from filelock import FileLock
+from filelock import FileLock, Timeout as FileLockTimeout
 from pydantic import BaseModel
 
 # CWD-relative default. Override with BALLAST_MEMORY_DIR env var or by calling
@@ -125,7 +125,8 @@ def _empty_scope_data() -> dict:
         "quirks": [],
         "runs": [],
         "semantic_profile": "",
-        "run_count": 0,
+        "run_count": 0,          # current window count (capped at 100)
+        "lifetime_run_count": 0, # monotonic counter; never truncated
         "last_consolidated": 0.0,
         "last_consolidated_synthesis_count": 0,
     }
@@ -255,51 +256,54 @@ def write(scope: str, new_observations: list[str]) -> None:
         return
 
     path = _scope_path(scope)
-    with _scope_lock(path):
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                data = _empty_scope_data()
-        else:
-            data = _empty_scope_data()
-
-        raw_quirks = data.get("quirks", [])
-        existing: dict[str, dict] = {}
-        now = time.time()
-
-        for q in raw_quirks:
-            if isinstance(q, str):
-                existing[q] = {"text": q, "confidence": 1.0, "last_seen": now}
-            elif isinstance(q, dict) and "text" in q:
-                existing[q["text"]] = q
-
-        new_set = set(new_observations)
-
-        # Decay observations not seen in this batch.
-        for text, q in existing.items():
-            if text not in new_set:
-                elapsed = now - float(q.get("last_seen", now))
-                q["confidence"] = max(
-                    0.1,
-                    float(q.get("confidence", 1.0))
-                    * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed),
-                )
-
-        # Update or insert observations seen in this batch.
-        for text in new_observations:
-            if text in existing:
-                prev = float(existing[text].get("confidence", 1.0))
-                last_seen = float(existing[text].get("last_seen", now))
-                elapsed = now - last_seen
-                decayed = prev * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed)
-                existing[text]["confidence"] = max(0.1, decayed + 1.0)
-                existing[text]["last_seen"] = now
+    try:
+        with _scope_lock(path):
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    data = _empty_scope_data()
             else:
-                existing[text] = {"text": text, "confidence": 1.0, "last_seen": now}
+                data = _empty_scope_data()
 
-        data["quirks"] = list(existing.values())
-        atomic_write_json(path, data)
+            raw_quirks = data.get("quirks", [])
+            existing: dict[str, dict] = {}
+            now = time.time()
+
+            for q in raw_quirks:
+                if isinstance(q, str):
+                    existing[q] = {"text": q, "confidence": 1.0, "last_seen": now}
+                elif isinstance(q, dict) and "text" in q:
+                    existing[q["text"]] = q
+
+            new_set = set(new_observations)
+
+            # Decay observations not seen in this batch.
+            for text, q in existing.items():
+                if text not in new_set:
+                    elapsed = now - float(q.get("last_seen", now))
+                    q["confidence"] = max(
+                        0.1,
+                        float(q.get("confidence", 1.0))
+                        * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed),
+                    )
+
+            # Update or insert observations seen in this batch.
+            for text in new_observations:
+                if text in existing:
+                    prev = float(existing[text].get("confidence", 1.0))
+                    last_seen = float(existing[text].get("last_seen", now))
+                    elapsed = now - last_seen
+                    decayed = prev * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed)
+                    existing[text]["confidence"] = max(0.1, decayed + 1.0)
+                    existing[text]["last_seen"] = now
+                else:
+                    existing[text] = {"text": text, "confidence": 1.0, "last_seen": now}
+
+            data["quirks"] = list(existing.values())
+            atomic_write_json(path, data)
+    except FileLockTimeout:
+        logger.warning("write: lock timeout for scope=%r — skipping observation write", scope)
 
 
 def extract_quirks(events: list[dict], scope: str) -> list[str]:
@@ -357,30 +361,34 @@ def log_run(
     This function owns run_count — write() does not touch it.
     """
     path = _scope_path(scope)
-    with _scope_lock(path):
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+    try:
+        with _scope_lock(path):
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    data = _empty_scope_data()
+            else:
                 data = _empty_scope_data()
-        else:
-            data = _empty_scope_data()
 
-        run_entry = {
-            "id": f"{int(time.time())}_{uuid.uuid4().hex[:6]}",
-            "goal": goal,
-            "timestamp": time.time(),
-            "step_count": len(events),
-            "success": success,
-            "is_trial": is_trial,
-        }
+            run_entry = {
+                "id": f"{int(time.time())}_{uuid.uuid4().hex[:6]}",
+                "goal": goal,
+                "timestamp": time.time(),
+                "step_count": len(events),
+                "success": success,
+                "is_trial": is_trial,
+            }
 
-        runs = data.get("runs", [])
-        runs.append(run_entry)
-        data["runs"] = runs[-100:]  # cap at 100 most recent
-        data["run_count"] = len(data["runs"])
+            runs = data.get("runs", [])
+            runs.append(run_entry)
+            data["runs"] = runs[-100:]  # cap at 100 most recent
+            data["run_count"] = len(data["runs"])
+            data["lifetime_run_count"] = int(data.get("lifetime_run_count", 0)) + 1
 
-        atomic_write_json(path, data)
+            atomic_write_json(path, data)
+    except FileLockTimeout:
+        logger.warning("log_run: lock timeout for scope=%r — run not recorded", scope)
 
 
 def consolidate(scope: str) -> bool:
@@ -396,78 +404,82 @@ def consolidate(scope: str) -> bool:
     if not path.exists():
         return False
 
-    with _scope_lock(path):
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return False
+    try:
+        with _scope_lock(path):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                return False
 
-        all_runs = data.get("runs", [])
-        # Only real, successful runs drive consolidation.
-        synthesis_runs = [
-            r for r in all_runs
-            if not r.get("is_trial", False) and r.get("success", True)
-        ]
+            all_runs = data.get("runs", [])
+            # Only real, successful runs drive consolidation.
+            synthesis_runs = [
+                r for r in all_runs
+                if not r.get("is_trial", False) and r.get("success", True)
+            ]
 
-        syn_count = len(synthesis_runs)
-        if syn_count == 0 or syn_count % CONSOLIDATE_EVERY != 0:
-            return False
-        last_done = int(data.get("last_consolidated_synthesis_count", 0))
-        if syn_count <= last_done:
-            return False
+            syn_count = len(synthesis_runs)
+            if syn_count == 0 or syn_count % CONSOLIDATE_EVERY != 0:
+                return False
+            last_done = int(data.get("last_consolidated_synthesis_count", 0))
+            if syn_count <= last_done:
+                return False
 
-        recent_runs = synthesis_runs[-20:]
-        runs_summary = json.dumps(
-            [
-                {
-                    "goal": r.get("goal"),
-                    "step_count": r.get("step_count"),
-                    "success": r.get("success"),
-                }
-                for r in recent_runs
-            ],
-            indent=2,
-        )
-
-        top_quirks = sorted(
-            [q for q in data.get("quirks", []) if isinstance(q, dict)],
-            key=lambda q: q.get("confidence", 0),
-            reverse=True,
-        )[:10]
-        quirks_summary = json.dumps(
-            [
-                {"text": q.get("text"), "confidence": q.get("confidence")}
-                for q in top_quirks
-            ],
-            indent=2,
-        )
-
-        prompt = (
-            f"You are analysing an AI agent's run history for scope: {scope}.\n"
-            f"Recent successful runs ({len(recent_runs)}):\n{runs_summary}\n\n"
-            f"Top observations (by confidence):\n{quirks_summary}\n\n"
-            "Write ONE sentence (max 40 words) strategic profile of this agent's behavior.\n"
-            "Focus on: reliability, common failure points, goal types that succeed vs struggle.\n"
-            'Return ONLY JSON: {"profile": "<your sentence ending with a period>"}'
-        )
-
-        try:
-            out = _parse_structured(
-                model=_ANTHROPIC_MODEL,
-                max_tokens=150,
-                messages=[{"role": "user", "content": prompt}],
-                response_model=_SemanticProfile,
+            recent_runs = synthesis_runs[-20:]
+            runs_summary = json.dumps(
+                [
+                    {
+                        "goal": r.get("goal"),
+                        "step_count": r.get("step_count"),
+                        "success": r.get("success"),
+                    }
+                    for r in recent_runs
+                ],
+                indent=2,
             )
-            data["semantic_profile"] = out.profile.strip()
-            data["last_consolidated"] = time.time()
-            data["last_consolidated_synthesis_count"] = syn_count
-            atomic_write_json(path, data)
-            return True
-        except Exception as exc:
-            logger.warning(
-                "consolidate_failed scope=%r: %s", scope, exc, exc_info=True
+
+            top_quirks = sorted(
+                [q for q in data.get("quirks", []) if isinstance(q, dict)],
+                key=lambda q: q.get("confidence", 0),
+                reverse=True,
+            )[:10]
+            quirks_summary = json.dumps(
+                [
+                    {"text": q.get("text"), "confidence": q.get("confidence")}
+                    for q in top_quirks
+                ],
+                indent=2,
             )
-            return False
+
+            prompt = (
+                f"You are analysing an AI agent's run history for scope: {scope}.\n"
+                f"Recent successful runs ({len(recent_runs)}):\n{runs_summary}\n\n"
+                f"Top observations (by confidence):\n{quirks_summary}\n\n"
+                "Write ONE sentence (max 40 words) strategic profile of this agent's behavior.\n"
+                "Focus on: reliability, common failure points, goal types that succeed vs struggle.\n"
+                'Return ONLY JSON: {"profile": "<your sentence ending with a period>"}'
+            )
+
+            try:
+                out = _parse_structured(
+                    model=_ANTHROPIC_MODEL,
+                    max_tokens=150,
+                    messages=[{"role": "user", "content": prompt}],
+                    response_model=_SemanticProfile,
+                )
+                data["semantic_profile"] = out.profile.strip()
+                data["last_consolidated"] = time.time()
+                data["last_consolidated_synthesis_count"] = syn_count
+                atomic_write_json(path, data)
+                return True
+            except Exception as exc:
+                logger.warning(
+                    "consolidate_failed scope=%r: %s", scope, exc, exc_info=True
+                )
+                return False
+    except FileLockTimeout:
+        logger.warning("consolidate: lock timeout for scope=%r — skipping", scope)
+        return False
 
 
 def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
