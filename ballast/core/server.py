@@ -8,8 +8,11 @@ Run via: python scripts/server.py
 """
 from __future__ import annotations
 
+import logging
 import os
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Header, HTTPException
 
@@ -53,5 +56,10 @@ def update_spec(
         # Evict the oldest entry to prevent unbounded memory growth.
         oldest_key = next(iter(_current_spec))
         del _current_spec[oldest_key]
+        logger.warning(
+            "server_spec_evicted job_id=%r to make room for %r "
+            "(slot cap=%d) — clients polling that job will receive {}",
+            oldest_key, job_id, _MAX_JOB_SLOTS,
+        )
     _current_spec[job_id] = spec.model_dump()
     return {"status": "ok", "version_hash": spec.version_hash}
