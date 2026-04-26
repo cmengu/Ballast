@@ -56,19 +56,19 @@ class BallastProgress:
     started_at: str = ""
     updated_at: str = ""
     last_clean_node_index: int = -1
-    completed_node_summaries: list = field(default_factory=list)
-    spec_transitions: list = field(default_factory=list)
+    completed_node_summaries: list[NodeSummary] = field(default_factory=list)
+    spec_transitions: list[dict] = field(default_factory=list)
     total_cost_usd: float = 0.0
     total_drift_events: int = 0
     total_violations: int = 0
-    remaining_success_criteria: list = field(default_factory=list)
+    remaining_success_criteria: list[str] = field(default_factory=list)
     last_escalation: str | None = None
     is_complete: bool = False
     # Escalations that were resolved by the chain (run continued after VIOLATED_IRREVERSIBLE).
     # total_violations counts only hard stops (EscalationFailed / HardInterrupt).
     total_escalations_resolved: int = 0
     # agent_id -> {"spent": float, "escalation_spent": float} — restored on resume
-    agent_spend_by_id: dict = field(default_factory=dict)
+    agent_spend_by_id: dict[str, dict[str, float]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.active_spec_hash:
