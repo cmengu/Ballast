@@ -819,12 +819,14 @@ async def run_with_spec(
                             ModelRequest(parts=[UserPromptPart(content=resolution)])
                         )
                     except EscalationFailed:
+                        progress.total_violations += 1
                         progress.write()
                         raise HardInterrupt(assessment, active_spec, node_index)
-                    progress.total_violations += 1
+                    # Escalation chain resolved — run continues. Count separately from hard stops.
+                    progress.total_escalations_resolved += 1
                     progress.last_escalation = datetime.now(timezone.utc).isoformat()
                     logger.warning(
-                        "irreversible_action_detected node=%d tool=%s spec_version=%s run_id=%s",
+                        "irreversible_action_detected_resolved node=%d tool=%s spec_version=%s run_id=%s",
                         node_index,
                         assessment.tool_name,
                         active_spec.version_hash,

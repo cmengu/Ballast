@@ -64,6 +64,9 @@ class BallastProgress:
     remaining_success_criteria: list = field(default_factory=list)
     last_escalation: str | None = None
     is_complete: bool = False
+    # Escalations that were resolved by the chain (run continued after VIOLATED_IRREVERSIBLE).
+    # total_violations counts only hard stops (EscalationFailed / HardInterrupt).
+    total_escalations_resolved: int = 0
     # agent_id -> {"spent": float, "escalation_spent": float} — restored on resume
     agent_spend_by_id: dict = field(default_factory=dict)
 
