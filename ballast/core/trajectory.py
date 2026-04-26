@@ -140,6 +140,30 @@ def score_tool_compliance(node: Any, spec: SpecModel) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Shared boolean coercion — handles string "false"/"true" from LLM tool outputs
+# ---------------------------------------------------------------------------
+
+def _coerce_bool(val: object, default: bool = False) -> bool:
+    """Robustly coerce an LLM tool-output field to bool.
+
+    Handles: actual bool, int (0/1), and string representations such as
+    "true"/"false"/"yes"/"no" (case-insensitive). Anything unrecognised
+    falls back to `default`.
+    """
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, int):
+        return bool(val)
+    if isinstance(val, str):
+        s = val.strip().lower()
+        if s in ("true", "yes", "1"):
+            return True
+        if s in ("false", "no", "0", ""):
+            return False
+    return default
+
+
+# ---------------------------------------------------------------------------
 # Scorer 2 — constraint violation (LLM, fail-safe 0.5)
 # ---------------------------------------------------------------------------
 
@@ -206,7 +230,7 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
         )
         for block in response.content:
             if block.type == "tool_use":
-                return 0.0 if block.input.get("violation", False) else 1.0
+                return 0.0 if _coerce_bool(block.input.get("violation", False)) else 1.0
     except Exception as e:
         logger.warning("constraint_scorer_failed node=%s — returning 0.5 fail-safe: %s", type(node).__name__, e)
     return 0.5  # Fail-safe: neutral on error
