@@ -30,6 +30,13 @@ def extract_node_info(node: Any) -> tuple[str, str, dict]:
 
     Mirrors the full duck-typed paths used for Layer-1 scoring (nested request/response,
     parts/messages). tool_info is {'tool_name': str, 'tool_args': dict} or {}.
+
+    Tool extraction policy — first match wins:
+        1. Direct node.tool_name + node.args attributes
+        2. First ToolCallPart/ToolCall/FunctionCall found in node.parts or node.messages
+        3. Same search inside node.request and node.response wrappers
+    Only the first tool call found is returned. Nodes with multiple tool parts
+    are uncommon in pydantic-ai; the first-wins policy is documented deliberately.
     """
     node_type = type(node).__name__
     content = ""
