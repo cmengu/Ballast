@@ -560,6 +560,24 @@ class TrajectoryChecker:
 
         self._step += 1
 
+        # ── Irreversible-action heuristic gate ───────────────────────────
+        # Mirrors score_drift() so the two APIs produce consistent labels for
+        # the same (node, spec) pair.
+        tool_name = tool_info.get("tool_name", "")
+        if tool_name and self.spec.irreversible_actions and tool_name in self.spec.irreversible_actions:
+            result = DriftResult(
+                score=0.0,
+                intent_score=1.0,
+                tool_score=0.0,
+                constraint_score=1.0,
+                failing_dimension="tool",
+                node_type=type(node).__name__,
+                spec_version=self.spec.version_hash,
+                raised_at_step=self._step,
+                threshold=self.spec.drift_threshold,
+            )
+            raise DriftDetected(result)
+
         tool_score, constraint_score, intent_score = _run_scorers(node, self.spec)
         aggregate = min(tool_score, constraint_score, intent_score)
 
