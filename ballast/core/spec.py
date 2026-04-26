@@ -52,6 +52,21 @@ class HarnessProfile(BaseModel):
 
     Excluded from version_hash — tuning changes do not invalidate the spec contract.
     Architectural invariants (spec fields) never change; these tune execution to model capability.
+
+    Defaults (sonnet profile):
+        model:                    "sonnet"
+        context_window_size:      8   nodes in the sliding full_window
+        checkpoint_every_n_nodes: 10  write ballast-progress.json every N nodes
+        enable_layer2_judge:      True  call evaluator.py for ambiguous scores
+        escalation_timeout_seconds: 300
+        enable_environment_probe: True  call probe.py for PROGRESSING nodes
+        spec_poll_interval_nodes: 1   poll M5 every node
+
+    Opus profile (for_model("opus")) overrides:
+        context_window_size:      16
+        checkpoint_every_n_nodes: 20
+        enable_layer2_judge:      False  (too expensive per node)
+        escalation_timeout_seconds: 600
     """
     model: Literal["sonnet", "opus"] = "sonnet"
     context_window_size: int = 8
