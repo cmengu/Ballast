@@ -37,7 +37,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from ballast.adapters.otel import emit_drift_span
 from ballast.core.constants import SONNET_MODEL
 from ballast.core.node_tools import extract_node_info as _extract_node_info
-from ballast.core.checkpoint import BallastProgress, NodeSummary
+from ballast.core.checkpoint import CHECKPOINT_FILE, BallastProgress, NodeSummary
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
 from ballast.core.guardrails import HardInterrupt, build_correction, can_resume
@@ -639,6 +639,7 @@ async def run_with_spec(
     poller: Optional[SpecPoller] = None,
     cost_guard: Optional[RunCostGuard] = None,
     agent_id: str = "default",
+    checkpoint_path: str = CHECKPOINT_FILE,
 ) -> Any:
     """Full 7-step node-boundary orchestration loop.
 
@@ -652,13 +653,17 @@ async def run_with_spec(
         7. OTel emit (emit_drift_span when label != PROGRESSING)
 
     Args:
-        agent:   pydantic-ai Agent instance.
-        task:    Task string to run.
-        spec:    Locked SpecModel — is_locked(spec) must be True.
-        poller:     Optional SpecPoller. If None, spec stays fixed for the run.
-        cost_guard: Optional RunCostGuard. If None, no cost enforcement is applied.
-        agent_id:   Agent identifier registered in cost_guard. Default "default".
-                    Ignored when cost_guard is None.
+        agent:           pydantic-ai Agent instance.
+        task:            Task string to run.
+        spec:            Locked SpecModel — is_locked(spec) must be True.
+        poller:          Optional SpecPoller. If None, spec stays fixed for the run.
+        cost_guard:      Optional RunCostGuard. If None, no cost enforcement is applied.
+        agent_id:        Agent identifier registered in cost_guard. Default "default".
+                         Ignored when cost_guard is None.
+        checkpoint_path: Path to the checkpoint JSON file. Defaults to
+                         CHECKPOINT_FILE ("ballast-progress.json" in CWD).
+                         Pass an absolute path when running concurrent jobs to
+                         prevent them from sharing a checkpoint file.
 
     Returns:
         Final agent output.
@@ -675,7 +680,7 @@ async def run_with_spec(
     active_spec = spec
 
     # Resume from checkpoint if available
-    progress = BallastProgress.read()
+    progress = BallastProgress.read(checkpoint_path)
     if can_resume(progress, spec):
         task = f"{progress.resume_context()}\n\nOriginal task: {task}"
         node_offset = progress.last_clean_node_index + 1
@@ -820,7 +825,7 @@ async def run_with_spec(
                         )
                     except EscalationFailed:
                         progress.total_violations += 1
-                        progress.write()
+                        progress.write(checkpoint_path)
                         raise HardInterrupt(assessment, active_spec, node_index)
                     # Escalation chain resolved — run continues. Count separately from hard stops.
                     progress.total_escalations_resolved += 1
@@ -884,7 +889,7 @@ async def run_with_spec(
                     progress.last_clean_node_index = node_index
                 _ckpt_interval = max(1, active_spec.harness.checkpoint_every_n_nodes)
                 if node_index % _ckpt_interval == 0:
-                    progress.write()
+                    progress.write(checkpoint_path)
 
                 # ── 7. OTel emit ─────────────────────────────────────────────
                 if assessment.label != "PROGRESSING":
@@ -893,14 +898,14 @@ async def run_with_spec(
                 node_index += 1
 
         except (HardInterrupt, KeyboardInterrupt, GeneratorExit):
-            progress.write()
+            progress.write(checkpoint_path)
             raise
         except Exception:
-            progress.write()
+            progress.write(checkpoint_path)
             raise
 
     progress.is_complete = True
-    progress.write()
+    progress.write(checkpoint_path)
 
     # Extract final output — defensive for pydantic-ai version differences.
     # agent_run.get_output() is preferred; result.output is the fallback.
