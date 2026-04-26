@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic_ai import Agent
 
 from ballast.core.constants import HAIKU_MODEL
+from ballast.core.node_tools import extract_node_info
 from ballast.core.spec import SpecModel
 
 if TYPE_CHECKING:
@@ -162,6 +163,22 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
         harness = packet.spec.harness
         ctx_n = int(getattr(harness, "context_window_size", 0) or 0)
         ctx_slice = packet.context[-ctx_n:] if ctx_n > 0 else []
+
+        # Compact raw pydantic-ai nodes to readable dict summaries.
+        # Dict entries (compact_history) are already in the right shape.
+        def _compact_ctx(entry: Any) -> str:
+            if isinstance(entry, dict):
+                tool = entry.get("tool_name", "?")
+                label = entry.get("label", "?")
+                score = entry.get("score", 0.0)
+                summary = entry.get("summary", "")[:120]
+                return f"tool={tool!r} label={label} score={score:.3f} summary={summary!r}"
+            # Raw pydantic-ai node — duck-type extract essentials
+            _, content, tool_info = extract_node_info(entry)
+            tool = tool_info.get("tool_name", "?")
+            return f"tool={tool!r} content={content[:120]!r}"
+
+        ctx_lines = "\n".join(f"  [{i}] {_compact_ctx(m)}" for i, m in enumerate(ctx_slice))
         prompt = (
             f"ASSESSMENT\n"
             f"  tool: {packet.assessment.tool_name!r}\n"
@@ -172,7 +189,7 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
             f"SPEC VERSION\n  {packet.spec.version_hash[:8]}\n\n"
             f"RUN CONTEXT\n  run_id={packet.run_id}  node_index={packet.node_index}\n\n"
             f"CONTEXT WINDOW (last {len(ctx_slice)} of {len(packet.context)} messages)\n"
-            + "\n".join(str(m) for m in ctx_slice)
+            + ctx_lines
         )
         result = await agent.run(prompt)
         raw = result.output if hasattr(result, "output") else str(result)
