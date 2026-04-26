@@ -125,7 +125,12 @@ class AgentCostGuard:
                 )
 
     def record(self, actual: float, is_escalation: bool = False) -> None:
-        """Commit actual spend. Only call after check() has passed."""
+        """Commit actual spend. Only call after check() has passed.
+
+        Validates the amount — guards against NaN/inf/negative values that
+        could corrupt totals if record() is ever called without a prior check().
+        """
+        actual = self._validate_amount(actual, "actual")
         if is_escalation:
             self._escalation_spent += actual
         else:
@@ -250,8 +255,15 @@ class RunCostGuard:
         for aid, payload in spend_map.items():
             if aid not in self._agents:
                 continue
-            spent = float(payload.get("spent", 0.0))
-            esc = float(payload.get("escalation_spent", 0.0))
+            try:
+                spent = AgentCostGuard._validate_amount(
+                    float(payload.get("spent", 0.0)), "spent"
+                )
+                esc = AgentCostGuard._validate_amount(
+                    float(payload.get("escalation_spent", 0.0)), "escalation_spent"
+                )
+            except (TypeError, ValueError):
+                continue  # skip corrupt checkpoint entries; guard starts at 0
             self._agents[aid].seed_spent(spent, esc)
 
     @property
