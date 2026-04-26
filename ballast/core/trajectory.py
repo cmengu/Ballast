@@ -676,7 +676,7 @@ async def run_with_spec(
                 # ── 1. Poll for spec update ─────────────────────────────────
                 _poll_interval = max(1, active_spec.harness.spec_poll_interval_nodes)
                 if poller and node_index % _poll_interval == 0:
-                    new_spec = poller.poll()
+                    new_spec = await asyncio.to_thread(poller.poll)
                     if new_spec:
                         if not is_locked(new_spec):
                             logger.warning(
