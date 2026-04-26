@@ -59,13 +59,15 @@ class AGUIAdapter(AgentStream):
         """
         logger.debug("[AGUIAdapter] goal=%r", goal)
 
-        event_sequence = []
+        _MAX_EVENT_SEQ = 2000  # prevent unbounded RAM on long-running traces
+        event_sequence: list[str] = []
         input_messages = {"messages": [{"role": "user", "content": goal}]}
 
         async for event in self._graph.astream_events(input_messages, version="v2"):
             event_type = event.get("event", "unknown")
             event_name = event.get("name", "")
-            event_sequence.append(event_type)
+            if len(event_sequence) < _MAX_EVENT_SEQ:
+                event_sequence.append(event_type)
 
             logger.debug("[EVENT] %s  name=%r", event_type, event_name)
 
