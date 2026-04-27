@@ -9,12 +9,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ballast.core.node_tools import extract_node_info as _extract_node_info
 from ballast.core.spec import SpecModel, lock
 from ballast.core.trajectory import (
     DriftDetected,
     DriftResult,
     TrajectoryChecker,
-    _extract_node_info,
     score_tool_compliance,
 )
 
