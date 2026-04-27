@@ -235,7 +235,10 @@ class RunCostGuard:
         Must be called before any check_and_record() call on this guard.
         Raises ValueError if the guard already has recorded spend — double-seeding
         would corrupt budget tracking.
+        Raises ValueError for NaN, infinite, or negative values — a tampered or
+        corrupted checkpoint with a large negative total would weaken the hard cap.
         """
+        prior_spend = AgentCostGuard._validate_amount(prior_spend, "prior_spend")
         if self._total != 0.0:
             raise ValueError(
                 f"seed_prior_spend: guard already has _total={self._total:.6f}; "
