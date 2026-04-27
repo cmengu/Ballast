@@ -31,16 +31,32 @@ _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*([\s\S]*?)\s*```")
 
 
 def _coerce_verified(val: object) -> bool:
-    """Parse probe JSON verified field; strings like 'false' must not be truthy."""
+    """Parse probe JSON verified field; strings like 'false' must not be truthy.
+
+    Coercion policy:
+        Explicit false set  → False   ("false", "0", "no", "off", int 0)
+        Explicit true set   → True    ("true", "1", "yes", "on", int/bool ≠ 0)
+        Unknown string      → False   (fail-closed: unknown ≠ verified)
+        Non-string/non-bool → False   (safe default for unexpected types)
+    Fail-closed on unknown input: if the LLM returns an unrecognised value we
+    cannot confirm the claim, so we treat it as unverified.
+    """
     if isinstance(val, bool):
         return val
+    if isinstance(val, int):
+        return val != 0
     if isinstance(val, str):
         s = val.strip().lower()
-        if s in ("false", "0", "no", "off"):
+        if s in ("false", "0", "no", "off", ""):
             return False
         if s in ("true", "1", "yes", "on"):
             return True
-    return True
+        # Unknown string — log and fail-closed
+        logger.warning(
+            "_coerce_verified: unrecognised value %r — treating as unverified", val
+        )
+        return False
+    return False
 
 
 def _extract_json(raw: str) -> str:
