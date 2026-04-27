@@ -168,19 +168,32 @@ def _parse_structured(
 # ---------------------------------------------------------------------------
 
 def atomic_write_json(path: Path, data: dict) -> None:
-    """Persist JSON via temp file + os.replace (atomic on POSIX)."""
+    """Persist JSON via temp file + fsync + os.replace (atomic + durable on POSIX).
+
+    fsync before replace ensures the data reaches disk before the directory
+    entry is updated. Without it, a crash between write and replace on some
+    filesystems can leave a zero-length or stale file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(
         suffix=".tmp",
         prefix=path.name + ".",
         dir=str(path.parent),
-        text=True,
     )
+    fd_open = True
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        fd_open = False
         os.replace(tmp_path, path)
     except Exception:
+        if fd_open:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         try:
             os.unlink(tmp_path)
         except OSError:
