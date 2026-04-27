@@ -30,7 +30,7 @@ from typing import Any, Awaitable, Callable, Optional, Union
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
-from ballast.core.spec import SpecDelta, SpecModel
+from ballast.core.spec import SpecDelta, SpecModel, is_locked
 from ballast.core.sync import SpecPoller
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,15 @@ async def run_with_live_spec(
         (output, audit_log)
         Each audit_log entry: {node_index, spec_hash, node_type, delta_injected}
         delta_injected: "fromhash→tohash" string, or None if no update at that node.
+
+    Raises:
+        ValueError: if the initial spec is not locked.
     """
+    if not is_locked(spec):
+        raise ValueError(
+            "run_with_live_spec requires a locked SpecModel. "
+            "Call lock(spec) before passing to run_with_live_spec."
+        )
     active_spec = spec
     node_index = 0
     audit_log: list[dict] = []
@@ -73,12 +81,19 @@ async def run_with_live_spec(
             delta: Optional[SpecDelta] = None
             new_spec = await asyncio.to_thread(poller.poll)
             if new_spec:
-                delta = active_spec.diff(new_spec)
-                active_spec = new_spec
-                injection = delta.as_injection()
-                run.ctx.state.message_history.append(
-                    ModelRequest(parts=[UserPromptPart(content=injection)])
-                )
+                if not is_locked(new_spec):
+                    logger.warning(
+                        "hook_spec_poll_rejected_unlocked at_node=%d — "
+                        "keeping active spec",
+                        node_index,
+                    )
+                else:
+                    delta = active_spec.diff(new_spec)
+                    active_spec = new_spec
+                    injection = delta.as_injection()
+                    run.ctx.state.message_history.append(
+                        ModelRequest(parts=[UserPromptPart(content=injection)])
+                    )
 
             # Stamp this node in the audit log
             audit_log.append({
