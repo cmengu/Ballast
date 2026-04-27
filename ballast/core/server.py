@@ -58,7 +58,7 @@ def update_spec(
         del _current_spec[oldest_key]
         logger.warning(
             "server_spec_evicted job_id=%r to make room for %r "
-            "(slot cap=%d) — clients polling that job will receive {}",
+            "(slot cap=%d) — polling clients for the evicted job will see an empty spec",
             oldest_key, job_id, _MAX_JOB_SLOTS,
         )
     _current_spec[job_id] = spec.model_dump()
