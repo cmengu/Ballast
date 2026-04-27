@@ -259,6 +259,13 @@ async def escalate(
                 run_id,
             )
             return resolution
+        # Broker said "don't escalate" but gave no resolution text — treat as
+        # an implicit escalate so CEO gets a chance rather than returning empty.
+        logger.warning(
+            "escalation_broker_empty_resolution node=%d run_id=%s — escalating to CEO",
+            node_index,
+            run_id,
+        )
 
     logger.info("escalation_broker_escalated node=%d run_id=%s", node_index, run_id)
 
@@ -273,6 +280,12 @@ async def escalate(
                 run_id,
             )
             return resolution
+        # Same policy: CEO said resolve but gave no text — fall to Human level.
+        logger.warning(
+            "escalation_ceo_empty_resolution node=%d run_id=%s — escalating to Human",
+            node_index,
+            run_id,
+        )
 
     logger.warning(
         "escalation_chain_exhausted node=%d tool=%s run_id=%s",
