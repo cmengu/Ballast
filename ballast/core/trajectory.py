@@ -539,6 +539,7 @@ class TrajectoryChecker:
             )
         self.spec = spec
         self._step: int = 0
+        self._full_window: list = []  # sliding window for Layer-2 context
 
     def check(self, node: Any) -> Optional[DriftResult]:
         """Score a single pydantic-ai Agent.iter node against the locked spec.
@@ -549,6 +550,10 @@ class TrajectoryChecker:
 
         Raises DriftDetected when aggregate score < spec.drift_threshold.
         DriftDetected is NEVER caught here — always propagates to the caller.
+
+        Layer-2 note: when the aggregate is in the ambiguous zone (0.25 < agg < 0.85)
+        and spec.harness.enable_layer2_judge is True, evaluate_node() is called with
+        the tracked full_window, mirroring score_drift().
         """
         if not _is_scoreable(node):
             return None
@@ -580,6 +585,29 @@ class TrajectoryChecker:
         tool_score, constraint_score, intent_score = _run_scorers(node, self.spec)
         aggregate = min(tool_score, constraint_score, intent_score)
 
+        # ── Layer-2 judge for ambiguous zone — mirrors score_drift() ─────
+        # Runs synchronously (evaluate_node uses a sync Anthropic client).
+        # Uses the tracked full_window so context accumulates across check() calls.
+        if aggregate > 0.25 and aggregate < 0.85 and self.spec.harness.enable_layer2_judge:
+            layer2_ctx = _layer2_evaluator_context(None, self._full_window)
+            try:
+                layer2_label, _ = evaluate_node(
+                    node, layer2_ctx, self.spec,
+                    tool_score=tool_score,
+                    constraint_score=constraint_score,
+                    intent_score=intent_score,
+                )
+            except Exception:  # noqa: BLE001
+                layer2_label = "STALLED"
+        else:
+            layer2_label = ""
+
+        # Maintain a sliding context window for subsequent Layer-2 calls.
+        self._full_window.append(node)
+        _win_sz = max(1, self.spec.harness.context_window_size)
+        if len(self._full_window) > _win_sz:
+            self._full_window.pop(0)
+
         # Failing dimension: only when below drift_threshold (gate failed).
         # If aggregate >= threshold, report "none" — individual scores may still be <1.0.
         if aggregate >= self.spec.drift_threshold:
@@ -594,8 +622,14 @@ class TrajectoryChecker:
         else:
             failing = "none"
 
+        # When Layer-2 upgrades an ambiguous node to VIOLATED, treat it as a drift event
+        # even if the raw aggregate is above the numeric threshold.
+        effective_score = aggregate
+        if layer2_label == "VIOLATED" and aggregate >= self.spec.drift_threshold:
+            effective_score = self.spec.drift_threshold - 0.01
+
         result = DriftResult(
-            score=round(aggregate, 4),
+            score=round(effective_score, 4),
             intent_score=round(intent_score, 4),
             tool_score=round(tool_score, 4),
             constraint_score=round(constraint_score, 4),
