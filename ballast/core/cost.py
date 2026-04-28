@@ -20,7 +20,10 @@ Invariant (projet-overview.md invariant 10):
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
+
+logger = logging.getLogger(__name__)
 
 HARD_CAP_USD: float = 300.0
 
@@ -179,6 +182,7 @@ class RunCostGuard:
     """
 
     def __init__(self, hard_cap_usd: float = HARD_CAP_USD) -> None:
+        hard_cap_usd = AgentCostGuard._validate_amount(hard_cap_usd, "hard_cap_usd")
         self._agents: dict[str, AgentCostGuard] = {}
         self._total: float = 0.0
         self.hard_cap_usd: float = hard_cap_usd
@@ -187,7 +191,14 @@ class RunCostGuard:
         """Register an agent with its spend cap and escalation pool.
 
         Must be called before check() or record() for this agent_id.
+        Raises ValueError if agent_id is already registered — double-registration
+        would silently reset the cap and lose any previously recorded spend.
         """
+        if agent_id in self._agents:
+            raise ValueError(
+                f"agent_id {agent_id!r} is already registered; "
+                "call register() only once per agent_id per run"
+            )
         self._agents[agent_id] = AgentCostGuard(agent_id, cap, escalation_pool)
 
     def check(
@@ -265,8 +276,13 @@ class RunCostGuard:
                 esc = AgentCostGuard._validate_amount(
                     float(payload.get("escalation_spent", 0.0)), "escalation_spent"
                 )
-            except (TypeError, ValueError):
-                continue  # skip corrupt checkpoint entries; guard starts at 0
+            except (TypeError, ValueError) as exc:
+                logger.warning(
+                    "seed_agent_spends: skipping corrupt entry for agent_id=%r: %s"
+                    " — guard for that agent starts at 0",
+                    aid, exc,
+                )
+                continue
             self._agents[aid].seed_spent(spent, esc)
 
     @property
