@@ -150,8 +150,13 @@ async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
         raw = result.output if hasattr(result, "output") else str(result)
         parsed = json.loads(_extract_json(raw))
         if not isinstance(parsed, dict):
-            return {"verified": True, "note": "probe_error: non-object JSON"}
-        vraw = parsed.get("verified", True)
+            return {"verified": False, "note": "probe_error: non-object JSON"}
+        if "verified" not in parsed:
+            logger.warning(
+                "probe_response missing 'verified' key tool=%r — failing closed",
+                packet.tool_name,
+            )
+        vraw = parsed.get("verified", False)
         return {
             "verified": _coerce_verified(vraw),
             "note": str(parsed.get("note", "")),
