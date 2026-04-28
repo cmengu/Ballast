@@ -294,18 +294,35 @@ def write(scope: str, new_observations: list[str]) -> None:
             # Decay observations not seen in this batch.
             for text, q in existing.items():
                 if text not in new_set:
-                    elapsed = now - float(q.get("last_seen", now))
+                    try:
+                        elapsed = now - float(q.get("last_seen", now))
+                    except (TypeError, ValueError):
+                        logger.warning(
+                            "write: corrupt last_seen for quirk %r scope=%r — resetting",
+                            text, scope,
+                        )
+                        elapsed = 0.0
+                        q["last_seen"] = now
+                    try:
+                        conf = float(q.get("confidence", 1.0))
+                    except (TypeError, ValueError):
+                        conf = 1.0
                     q["confidence"] = max(
                         0.1,
-                        float(q.get("confidence", 1.0))
-                        * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed),
+                        conf * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed),
                     )
 
             # Update or insert observations seen in this batch.
             for text in new_observations:
                 if text in existing:
-                    prev = float(existing[text].get("confidence", 1.0))
-                    last_seen = float(existing[text].get("last_seen", now))
+                    try:
+                        prev = float(existing[text].get("confidence", 1.0))
+                    except (TypeError, ValueError):
+                        prev = 1.0
+                    try:
+                        last_seen = float(existing[text].get("last_seen", now))
+                    except (TypeError, ValueError):
+                        last_seen = now
                     elapsed = now - last_seen
                     decayed = prev * _decay_factor(_HALF_LIFE_LONG_TERM_SECONDS, elapsed)
                     existing[text]["confidence"] = max(0.1, decayed + 1.0)
