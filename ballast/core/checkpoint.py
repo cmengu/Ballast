@@ -143,6 +143,13 @@ class BallastProgress:
         ):
             data["agent_spend_by_id"] = {}
         allowed = {f.name for f in fields(cls)}
+        dropped = [k for k in data if k not in allowed]
+        if dropped:
+            logger.debug(
+                "checkpoint_read: dropping unknown keys %s from %s — "
+                "likely written by a newer Ballast version",
+                dropped, path,
+            )
         filtered = {k: v for k, v in data.items() if k in allowed}
         try:
             return cls(**filtered)
