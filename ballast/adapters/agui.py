@@ -99,11 +99,17 @@ class AGUIAdapter(AgentStream):
 
 
 def _truncate(obj: object, max_len: int = 300) -> object:
-    """Truncate string values in dicts/lists for readable printing."""
+    """Truncate string values in dicts/lists for readable debug printing.
+
+    Dict keys are sorted before slicing so the output is deterministic across
+    Python versions and call sites (insertion order alone is not stable enough
+    for test assertions or log diffing).  Only the first 10 keys are kept.
+    List truncation keeps the first 5 items.
+    """
     if isinstance(obj, str):
         return obj[:max_len] + "..." if len(obj) > max_len else obj
     if isinstance(obj, dict):
-        return {k: _truncate(v, max_len) for k, v in list(obj.items())[:10]}
+        return {k: _truncate(v, max_len) for k, v in sorted(obj.items())[:10]}
     if isinstance(obj, list):
         return [_truncate(v, max_len) for v in obj[:5]]
     return obj
