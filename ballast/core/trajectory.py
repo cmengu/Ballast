@@ -471,7 +471,11 @@ def _layer2_evaluator_context(compact_history: list | None, full_window: list) -
 
     evaluate_node() only consumes dict rows (tool_name, label, score, …). compact_history
     already holds dicts from _compact_node; full_window still holds raw pydantic-ai nodes,
-    which are compacted on the fly with neutral placeholders for score/label/cost.
+    which are compacted on the fly.
+
+    Raw pydantic-ai nodes that have not yet been scored are compacted with explicit
+    "UNSCORED" label and score=0.5 (neutral mid-point) so the Layer-2 judge can see
+    their tool/content without being biased by false-positive PROGRESSING/1.0 placeholders.
     """
     out: list[dict] = []
     for n in compact_history or []:
@@ -481,7 +485,7 @@ def _layer2_evaluator_context(compact_history: list | None, full_window: list) -
         if isinstance(n, dict):
             out.append(n)
         else:
-            out.append(_compact_node(n, 1.0, "PROGRESSING", 0.0, True))
+            out.append(_compact_node(n, 0.5, "UNSCORED", 0.0, False))
     return out
 
 
