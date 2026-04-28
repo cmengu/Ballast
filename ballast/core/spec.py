@@ -526,6 +526,12 @@ def clarify(spec: SpecModel) -> SpecModel:
     Raises SpecTooVague(missing_fields) if LLM cannot infer required fields.
 
     Caller decides when to call this — typically when score_specificity() < 0.6.
+
+    Scope: clarify() enriches intent, success_criteria, and constraints only.
+    It never modifies irreversible_actions — those are security boundaries set
+    by the operator at spec authoring time and must not be inferred by an LLM.
+    irreversible_actions from the input spec are always preserved verbatim on
+    the returned SpecModel.
     """
     criteria = "\n".join(f"  - {c}" for c in spec.success_criteria)
     constraints_text = "\n".join(f"  - {c}" for c in spec.constraints)
