@@ -212,5 +212,14 @@ def run(path: str = "ballast-progress.json", poll_interval: float = 2.0) -> None
 
 if __name__ == "__main__":
     _path = sys.argv[1] if len(sys.argv) > 1 else "ballast-progress.json"
-    _interval = float(sys.argv[2]) if len(sys.argv) > 2 else 2.0
+    if len(sys.argv) > 2:
+        try:
+            _interval = float(sys.argv[2])
+            if _interval <= 0:
+                raise ValueError("poll_interval must be positive")
+        except ValueError as _exc:
+            print(f"error: invalid poll_interval {sys.argv[2]!r}: {_exc}", file=sys.stderr)
+            sys.exit(1)
+    else:
+        _interval = 2.0
     run(path=_path, poll_interval=_interval)
