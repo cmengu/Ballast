@@ -123,4 +123,19 @@ async def run_with_live_spec(
 
             node_index += 1
 
-    return run.result.output, audit_log
+    # Defensive output extraction — mirrors run_with_spec to handle pydantic-ai
+    # version differences without crashing if result shape changes.
+    if hasattr(run, "get_output"):
+        output = await run.get_output()
+    else:
+        result = getattr(run, "result", None)
+        if result is not None:
+            # Prefer .data (pydantic-ai >=0.0.20), fall back to .output (older)
+            if "data" in type(result).__dict__ or (hasattr(result, "__dataclass_fields__") and "data" in result.__dataclass_fields__):
+                output = result.data
+            else:
+                output = getattr(result, "output", result)
+        else:
+            logger.warning("run_with_live_spec: output extraction failed")
+            output = None
+    return output, audit_log
