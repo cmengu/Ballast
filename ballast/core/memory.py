@@ -683,6 +683,12 @@ def get_domain_threshold(domain: str) -> float:
         with _scope_lock(path):
             data = json.loads(path.read_text(encoding="utf-8"))
         return float(data.get("threshold", _DEFAULT_THRESHOLD))
+    except FileLockTimeout:
+        logger.warning(
+            "get_domain_threshold: lock timeout for domain=%r — returning default %.2f",
+            domain, _DEFAULT_THRESHOLD,
+        )
+        return _DEFAULT_THRESHOLD
     except (json.JSONDecodeError, OSError, ValueError):
         return _DEFAULT_THRESHOLD
 
