@@ -227,10 +227,14 @@ class RunCostGuard:
             raise HardCapExceeded(self._total, estimated, self.hard_cap_usd)
         self._agents[agent_id].check(estimated, is_escalation)
 
-    def record(
+    def _record(
         self, agent_id: str, actual: float, is_escalation: bool = False
     ) -> None:
-        """Commit actual spend to global total and per-agent guard."""
+        """Internal: commit actual spend to global total and per-agent guard.
+
+        DO NOT call directly — use check_and_record() which enforces caps before
+        committing. Calling _record() alone bypasses the hard-cap enforcement.
+        """
         self._total += actual
         self._agents[agent_id].record(actual, is_escalation)
 
@@ -239,12 +243,12 @@ class RunCostGuard:
     ) -> None:
         """Raise if actual would exceed any cap, then commit atomically.
 
-        Preferred call-site for run_with_spec. Prevents partial mutation if
-        a future await is inserted between check and record.
+        The only safe public entry point for recording spend. Prevents partial
+        mutation if a future await is inserted between check and record.
         Checks global hard cap first, then per-agent cap, then commits both.
         """
         self.check(agent_id, actual, is_escalation)
-        self.record(agent_id, actual, is_escalation)
+        self._record(agent_id, actual, is_escalation)
 
     def seed_prior_spend(self, prior_spend: float) -> None:
         """Seed global total from a prior run segment (used by run_with_spec on resume).
