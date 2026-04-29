@@ -149,6 +149,9 @@ def _coerce_bool(val: object, default: bool = False) -> bool:
     Handles: actual bool, int (0/1), and string representations such as
     "true"/"false"/"yes"/"no" (case-insensitive). Anything unrecognised
     falls back to `default`.
+
+    int handling: any nonzero int is True (Python semantics). This is
+    intentional — an LLM returning `violation: 2` is still a violation.
     """
     if isinstance(val, bool):
         return val
@@ -612,7 +615,11 @@ class TrajectoryChecker:
                     constraint_score=constraint_score,
                     intent_score=intent_score,
                 )
-            except Exception:  # noqa: BLE001
+            except (anthropic.APIError, anthropic.APIConnectionError, OSError, ValueError) as _exc:
+                logger.warning(
+                    "trajectory_checker_layer2_failed step=%d exc=%s — using STALLED",
+                    self._step, _exc,
+                )
                 layer2_label = "STALLED"
         else:
             layer2_label = ""
