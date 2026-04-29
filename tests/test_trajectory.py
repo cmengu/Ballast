@@ -207,6 +207,73 @@ def test_checker_intent_misalignment_raises_drift():
 
 
 # ---------------------------------------------------------------------------
+# TrajectoryChecker — Layer-2 effective_score and DriftDetected semantics
+# ---------------------------------------------------------------------------
+
+def test_checker_layer2_violated_above_threshold_raises_drift_detected():
+    """Layer-2 VIOLATED verdict must raise DriftDetected even when raw aggregate >= threshold."""
+    from ballast.core.spec import HarnessProfile
+    harness = HarnessProfile(enable_layer2_judge=True)
+    spec = lock(SpecModel(
+        intent="count words",
+        success_criteria=["returns int"],
+        drift_threshold=0.5,
+        harness=harness,
+    ))
+    checker = TrajectoryChecker(spec)
+    node = FakeTextNode("some content")
+    # Raw scorers return 0.8 (above threshold=0.5 → would normally pass)
+    # but Layer-2 says VIOLATED
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.8), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.8), \
+         patch("ballast.core.trajectory.evaluate_node", return_value=("VIOLATED", "bad action")):
+        with pytest.raises(DriftDetected) as exc_info:
+            checker.check(node)
+    result = exc_info.value.result
+    # effective_score must be capped below threshold
+    assert result.score < spec.drift_threshold
+    assert result.failing_dimension == "intent"
+
+
+def test_checker_layer2_progressing_above_threshold_returns_result():
+    """Layer-2 PROGRESSING verdict for aggregate above threshold → no exception."""
+    from ballast.core.spec import HarnessProfile
+    harness = HarnessProfile(enable_layer2_judge=True)
+    spec = lock(SpecModel(
+        intent="count words",
+        success_criteria=["returns int"],
+        drift_threshold=0.5,
+        harness=harness,
+    ))
+    checker = TrajectoryChecker(spec)
+    node = FakeTextNode("some content")
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=0.7), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=0.7), \
+         patch("ballast.core.trajectory.evaluate_node", return_value=("PROGRESSING", "ok")):
+        result = checker.check(node)
+    assert isinstance(result, DriftResult)
+    assert result.score >= spec.drift_threshold
+
+
+def test_checker_layer2_not_triggered_outside_ambiguous_band():
+    """evaluate_node must NOT be called when aggregate >= 0.85 (clear PROGRESSING)."""
+    from ballast.core.spec import HarnessProfile
+    harness = HarnessProfile(enable_layer2_judge=True)
+    spec = lock(SpecModel(
+        intent="count words",
+        success_criteria=["returns int"],
+        harness=harness,
+    ))
+    checker = TrajectoryChecker(spec)
+    node = FakeTextNode("some content")
+    with patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0), \
+         patch("ballast.core.trajectory.score_intent_alignment", return_value=1.0), \
+         patch("ballast.core.trajectory.evaluate_node") as mock_eval:
+        checker.check(node)
+    mock_eval.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # failing_dimension priority
 # ---------------------------------------------------------------------------
 
