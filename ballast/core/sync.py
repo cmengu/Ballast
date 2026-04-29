@@ -30,11 +30,26 @@ class SpecPoller:
 
     poll() compares SpecModel.version_hash (16-char sha256) — not a timestamp.
     Caller must call set_initial() before poll() or poll() returns None always.
+
+    A single shared httpx.Client is reused across all poll() calls to avoid
+    per-call TCP connection setup overhead. It is closed when the poller is
+    used as a context manager or when close() is called explicitly.
     """
 
     def __init__(self, base_url: str, job_id: str) -> None:
         self.url = f"{base_url.rstrip('/')}/spec/{job_id}/current"
         self._current: SpecModel | None = None
+        self._client = httpx.Client(timeout=2.0)
+
+    def close(self) -> None:
+        """Close the underlying httpx client. Safe to call multiple times."""
+        self._client.close()
+
+    def __enter__(self) -> "SpecPoller":
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
 
     def set_initial(self, spec: SpecModel) -> None:
         """Set the baseline spec before polling starts."""
@@ -51,7 +66,7 @@ class SpecPoller:
             return None
         data: dict | None = None
         try:
-            r = httpx.get(self.url, timeout=2.0)
+            r = self._client.get(self.url)
             if r.status_code != 200:
                 return None
             data = r.json()

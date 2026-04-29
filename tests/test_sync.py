@@ -1,7 +1,7 @@
 """Tests for ballast/core/server.py and ballast/core/sync.py.
 
 Server tests use FastAPI TestClient — no live server needed.
-SpecPoller tests mock httpx.get — no network needed.
+SpecPoller tests mock poller._client.get — no network needed.
 """
 from unittest.mock import MagicMock, patch
 
@@ -113,7 +113,7 @@ def test_poller_returns_none_when_version_unchanged():
     mock_r = MagicMock()
     mock_r.status_code = 200
     mock_r.json.return_value = spec.model_dump()
-    with patch("ballast.core.sync.httpx.get", return_value=mock_r):
+    with patch.object(poller._client, "get", return_value=mock_r):
         assert poller.poll() is None
 
 
@@ -125,7 +125,7 @@ def test_poller_returns_new_spec_when_version_changed():
     mock_r = MagicMock()
     mock_r.status_code = 200
     mock_r.json.return_value = spec_v2.model_dump()
-    with patch("ballast.core.sync.httpx.get", return_value=mock_r):
+    with patch.object(poller._client, "get", return_value=mock_r):
         result = poller.poll()
     assert result is not None
     assert result.version_hash == spec_v2.version_hash
@@ -136,8 +136,8 @@ def test_poller_returns_none_on_network_error():
     spec = _make_spec()
     poller = SpecPoller("http://localhost:8765", "job-001")
     poller.set_initial(spec)
-    with patch(
-        "ballast.core.sync.httpx.get",
+    with patch.object(
+        poller._client, "get",
         side_effect=httpx.ConnectError("unreachable"),
     ):
         assert poller.poll() is None
@@ -149,5 +149,5 @@ def test_poller_returns_none_on_non_200_status():
     poller.set_initial(spec)
     mock_r = MagicMock()
     mock_r.status_code = 500
-    with patch("ballast.core.sync.httpx.get", return_value=mock_r):
+    with patch.object(poller._client, "get", return_value=mock_r):
         assert poller.poll() is None
