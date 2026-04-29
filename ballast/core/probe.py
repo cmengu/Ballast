@@ -129,13 +129,13 @@ def _get_tool_info(node: Any) -> tuple[str, dict, str]:
 # ---------------------------------------------------------------------------
 
 async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
-    """Call the probe agent. Returns parsed dict or fail-open dict on any exception.
+    """Call the probe agent. Returns parsed dict or fail-closed dict on any exception.
 
     Async because agent.run() is async-native. run_sync() must NOT be used here:
     _call_probe_agent is always called from verify_node_claim() which is always
     called from the async run_with_spec() loop.
 
-    Never raises. Any exception → {"verified": True, "note": "probe_error: <exc>"}.
+    Never raises. Any exception → {"verified": False, "note": "probe_error: <exc>"}.
     """
     constraints_block = (
         "\n".join(f"  - {c}" for c in packet.spec_constraints)
@@ -194,10 +194,10 @@ async def verify_node_claim(
         spec:   Active locked SpecModel.
 
     Returns:
-        (True, "")                    — probe passed, no constraint violation.
-        (True, "no tool call")        — node has no tool call; nothing to verify.
-        (True, "probe_error: <exc>")  — probe agent failed; fail-open.
-        (False, "<note>")             — constraint violation detected.
+        (True, "")                     — probe passed, no constraint violation.
+        (True, "no tool call")         — node has no tool call; nothing to verify.
+        (False, "probe_error: <exc>")  — probe agent failed; fail-closed.
+        (False, "<note>")              — constraint violation detected.
     """
     tool_name, tool_args, content = _get_tool_info(node)
 
