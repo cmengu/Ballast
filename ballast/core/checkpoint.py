@@ -41,6 +41,9 @@ class NodeSummary:
     timestamp: str              # ISO-8601 UTC
 
 
+_MAX_NODE_SUMMARIES = 500  # ring-buffer cap for completed_node_summaries
+
+
 @dataclass
 class BallastProgress:
     """Full run state. Written to ballast-progress.json at every checkpoint.
@@ -48,6 +51,11 @@ class BallastProgress:
     spec_hash:        version_hash at job dispatch (never changes during run).
     active_spec_hash: version_hash currently active (updates on live spec change).
     spec_transitions: ordered log of live spec updates seen during this run.
+
+    completed_node_summaries is capped at _MAX_NODE_SUMMARIES most-recent entries
+    to prevent linear checkpoint growth on long runs. Counters (total_cost_usd,
+    total_drift_events, etc.) are always accurate; the summary list is a rolling
+    window for diagnostics only.
     """
     spec_hash: str
     active_spec_hash: str = ""

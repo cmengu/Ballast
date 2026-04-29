@@ -37,7 +37,7 @@ from pydantic_ai.messages import ModelRequest, UserPromptPart
 from ballast.adapters.otel import emit_drift_span
 from ballast.core.constants import SONNET_MODEL
 from ballast.core.node_tools import extract_node_info as _extract_node_info
-from ballast.core.checkpoint import CHECKPOINT_FILE, BallastProgress, NodeSummary
+from ballast.core.checkpoint import CHECKPOINT_FILE, BallastProgress, NodeSummary, _MAX_NODE_SUMMARIES
 from ballast.core.cost import RunCostGuard
 from ballast.core.escalation import EscalationFailed, escalate
 from ballast.core.guardrails import HardInterrupt, build_correction, can_resume
@@ -942,6 +942,12 @@ async def run_with_spec(
                     spec_hash=active_spec.version_hash,   # active hash — NOT dispatch hash
                     timestamp=datetime.now(timezone.utc).isoformat(),
                 ))
+                # Ring-buffer: keep only the most recent summaries to prevent unbounded
+                # checkpoint growth on long runs. Aggregate counters remain exact.
+                if len(progress.completed_node_summaries) > _MAX_NODE_SUMMARIES:
+                    progress.completed_node_summaries = (
+                        progress.completed_node_summaries[-_MAX_NODE_SUMMARIES:]
+                    )
                 progress.total_cost_usd += node_cost
                 progress.updated_at = datetime.now(timezone.utc).isoformat()
                 if assessment.label not in ("VIOLATED", "VIOLATED_IRREVERSIBLE"):
