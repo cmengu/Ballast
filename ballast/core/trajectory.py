@@ -969,7 +969,14 @@ async def run_with_spec(
 
                 node_index += 1
 
-        except (HardInterrupt, KeyboardInterrupt, GeneratorExit):
+        except (HardInterrupt, KeyboardInterrupt):
+            progress.write(checkpoint_path)
+            raise
+        except GeneratorExit:
+            # GeneratorExit is a BaseException used by the generator protocol.
+            # Checkpoint before propagating so the run state is not lost, but
+            # keep it separate from the Exception block to avoid interfering
+            # with generator cleanup semantics.
             progress.write(checkpoint_path)
             raise
         except Exception:
