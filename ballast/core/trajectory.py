@@ -627,10 +627,15 @@ class TrajectoryChecker:
             failing = "none"
 
         # When Layer-2 upgrades an ambiguous node to VIOLATED, treat it as a drift event
-        # even if the raw aggregate is above the numeric threshold.
+        # even if the raw aggregate is above the numeric threshold. Cap effective_score so
+        # the DriftDetected check (below) fires correctly.
         effective_score = aggregate
         if layer2_label == "VIOLATED" and aggregate >= self.spec.drift_threshold:
             effective_score = self.spec.drift_threshold - 0.01
+            # Layer-2 said VIOLATED but Layer-1 scores couldn't pin the dimension;
+            # attribute to "intent" as the most general failure class.
+            if failing == "none":
+                failing = "intent"
 
         result = DriftResult(
             score=round(effective_score, 4),
@@ -654,7 +659,7 @@ class TrajectoryChecker:
             type(node).__name__,
         )
 
-        if aggregate < self.spec.drift_threshold:
+        if effective_score < self.spec.drift_threshold:
             raise DriftDetected(result)
 
         return result
@@ -875,7 +880,13 @@ async def run_with_spec(
                         run_id,
                     )
 
-                elif assessment.score < active_spec.drift_threshold:
+                elif (
+                    assessment.score < active_spec.drift_threshold
+                    or assessment.label == "VIOLATED"
+                ):
+                    # Layer-2 may mark a node VIOLATED while the raw numeric aggregate
+                    # is still >= drift_threshold (ambiguous band). Enforce on label too
+                    # so the correction is always injected on any VIOLATED verdict.
                     correction = build_correction(assessment, active_spec, node_index)
                     agent_run.ctx.state.message_history.append(
                         ModelRequest(parts=[UserPromptPart(content=correction)])
