@@ -200,8 +200,9 @@ _CONSTRAINT_TOOL = {
 def score_constraint_violation(node: Any, spec: SpecModel) -> float:
     """LLM-based: does this action breach a hard constraint in spec.constraints?
 
-    Returns: 1.0 (no violation), 0.0 (violated), 0.5 (fail-safe on error).
-    Never raises.
+    Returns: 1.0 (no violation), 0.0 (violated or LLM error).
+    Fail-closed: returns 0.0 on any API/parse error so guardrails are not
+    weakened when the judge is unavailable. Never raises.
     """
     if not spec.constraints:
         return 1.0  # Nothing to violate
@@ -232,8 +233,11 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
             if block.type == "tool_use":
                 return 0.0 if _coerce_bool(block.input.get("violation", False)) else 1.0
     except Exception as e:
-        logger.warning("constraint_scorer_failed node=%s — returning 0.5 fail-safe: %s", type(node).__name__, e)
-    return 0.5  # Fail-safe: neutral on error
+        logger.warning(
+            "constraint_scorer_failed node=%s — returning 0.0 (fail-closed): %s",
+            type(node).__name__, e,
+        )
+    return 0.0  # Fail-closed: treat as violation when judge is unavailable
 
 
 # ---------------------------------------------------------------------------
@@ -273,12 +277,16 @@ _INTENT_TOOL = {
 def score_intent_alignment(node: Any, spec: SpecModel) -> float:
     """LLM-based: is this action moving toward the goal?
 
-    Returns float in [0.0, 1.0]. Fail-safe: 0.5 on any error. Never raises.
+    Returns float in [0.0, 1.0].
+    Fail-closed: returns 0.0 on any API/parse error so the aggregate stays
+    in the ambiguous/VIOLATED zone rather than masking a real problem. Never raises.
+    Empty nodes with no scoreable content return 1.0 (neutral pass-through —
+    they have no evidence of misalignment either).
     """
     _, content, tool_info = _extract_node_info(node)
     scoreable = content or tool_info.get("tool_name", "")
     if not scoreable:
-        return 0.5  # Nothing to score — neutral
+        return 1.0  # No scoreable content — no evidence of misalignment
 
     criteria = "\n".join(f"  - {c}" for c in spec.success_criteria)
     prompt = (
@@ -304,8 +312,11 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
                 score = float(block.input.get("score", 0.5))
                 return max(0.0, min(1.0, score))
     except Exception as e:
-        logger.warning("intent_scorer_failed node=%s — returning 0.5 fail-safe: %s", type(node).__name__, e)
-    return 0.5  # Fail-safe: neutral on error
+        logger.warning(
+            "intent_scorer_failed node=%s — returning 0.0 (fail-closed): %s",
+            type(node).__name__, e,
+        )
+    return 0.0  # Fail-closed: treat as no-intent when judge is unavailable
 
 
 # ---------------------------------------------------------------------------
