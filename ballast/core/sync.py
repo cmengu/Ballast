@@ -45,6 +45,17 @@ class SpecPoller:
         """Close the underlying httpx client. Safe to call multiple times."""
         self._client.close()
 
+    def __del__(self) -> None:
+        """Best-effort cleanup when GC collects the poller without explicit close().
+
+        Prefer explicit `with SpecPoller(...) as p:` or `p.close()` — __del__ is
+        not guaranteed to run promptly (or at all in CPython with reference cycles).
+        """
+        try:
+            self._client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
     def __enter__(self) -> "SpecPoller":
         return self
 
