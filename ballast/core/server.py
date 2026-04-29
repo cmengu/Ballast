@@ -26,6 +26,13 @@ _current_spec: dict[str, dict] = {}  # job_id → SpecModel.model_dump()
 # When set, GET/POST spec routes require header X-Ballast-Token matching this value.
 _SPEC_SERVER_TOKEN = os.environ.get("BALLAST_SPEC_SERVER_TOKEN", "").strip()
 
+if not _SPEC_SERVER_TOKEN:
+    logger.warning(
+        "BALLAST_SPEC_SERVER_TOKEN is not set — the spec server is running without "
+        "authentication. Any client that can reach this process may read or overwrite "
+        "specs for any job_id. Set BALLAST_SPEC_SERVER_TOKEN or restrict network access."
+    )
+
 
 def _require_token(x_ballast_token: Optional[str]) -> None:
     if not _SPEC_SERVER_TOKEN:
