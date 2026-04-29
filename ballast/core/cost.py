@@ -149,7 +149,13 @@ class AgentCostGuard:
         self.record(actual, is_escalation)
 
     def seed_spent(self, spent: float, escalation_spent: float = 0.0) -> None:
-        """Restore totals from a checkpoint. Call before any check_and_record."""
+        """Restore totals from a checkpoint. Call before any check_and_record.
+
+        Both amounts are validated via _validate_amount to prevent NaN/inf/negative
+        checkpoint values from corrupting the guard's running totals.
+        """
+        spent = AgentCostGuard._validate_amount(spent, "spent")
+        escalation_spent = AgentCostGuard._validate_amount(escalation_spent, "escalation_spent")
         if self._spent != 0.0 or self._escalation_spent != 0.0:
             raise ValueError(
                 f"cannot seed agent {self.agent_id!r}: already has "
