@@ -445,8 +445,11 @@ _SPECIFICITY_TOOL = {
 def score_specificity(spec: SpecModel) -> float:
     """LLM-based: how specific and verifiable is this spec?
 
-    Returns float in [0.0, 1.0]. Fail-safe: returns 0.5 on any error.
-    Never raises.
+    Returns float in [0.0, 1.0].
+    Fail-closed: returns 0.0 on any API/parse error so callers that gate on
+    this score (e.g. 'if score < 0.6: clarify()') will always trigger
+    clarification on transient failures rather than silently treating the spec
+    as "medium quality". Never raises.
     """
     criteria = "\n".join(f"  - {c}" for c in spec.success_criteria)
     constraints = "\n".join(f"  - {c}" for c in spec.constraints)
@@ -467,10 +470,10 @@ def score_specificity(spec: SpecModel) -> float:
         for block in response.content:
             if block.type == "tool_use":
                 return max(0.0, min(1.0, float(block.input.get("score", 0.5))))
-        logger.warning("score_specificity: no tool_use block in response — returning 0.5")
+        logger.warning("score_specificity: no tool_use block in response — returning 0.0 (fail-closed)")
     except Exception as exc:
-        logger.warning("score_specificity failed — returning 0.5 fail-safe: %s", exc)
-    return 0.5
+        logger.warning("score_specificity failed — returning 0.0 (fail-closed): %s", exc)
+    return 0.0
 
 
 # ---------------------------------------------------------------------------
