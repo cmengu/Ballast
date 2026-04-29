@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import OrderedDict
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -21,7 +22,8 @@ from ballast.core.spec import SpecModel
 app = FastAPI()
 
 _MAX_JOB_SLOTS = 500  # cap to prevent unbounded memory growth on long-lived servers
-_current_spec: dict[str, dict] = {}  # job_id → SpecModel.model_dump()
+# OrderedDict enables O(1) LRU eviction: move_to_end on read, pop oldest on overflow.
+_current_spec: OrderedDict[str, dict] = OrderedDict()
 
 # When set, GET/POST spec routes require header X-Ballast-Token matching this value.
 _SPEC_SERVER_TOKEN = os.environ.get("BALLAST_SPEC_SERVER_TOKEN", "").strip()
@@ -48,6 +50,8 @@ def get_spec(
 ) -> dict:
     """Return the current spec for this job, or {} if not yet set."""
     _require_token(x_ballast_token)
+    if job_id in _current_spec:
+        _current_spec.move_to_end(job_id)  # mark as most-recently used
     return _current_spec.get(job_id, {})
 
 
@@ -60,13 +64,13 @@ def update_spec(
     """Store the new spec for this job. Returns version_hash for confirmation."""
     _require_token(x_ballast_token)
     if job_id not in _current_spec and len(_current_spec) >= _MAX_JOB_SLOTS:
-        # Evict the oldest entry to prevent unbounded memory growth.
-        oldest_key = next(iter(_current_spec))
-        del _current_spec[oldest_key]
+        # Evict the *least-recently-used* entry (first key in OrderedDict).
+        oldest_key, _ = _current_spec.popitem(last=False)
         logger.warning(
-            "server_spec_evicted job_id=%r to make room for %r "
+            "server_spec_evicted job_id=%r (LRU) to make room for %r "
             "(slot cap=%d) — polling clients for the evicted job will see an empty spec",
             oldest_key, job_id, _MAX_JOB_SLOTS,
         )
     _current_spec[job_id] = spec.model_dump()
+    _current_spec.move_to_end(job_id)  # mark as most-recently used
     return {"status": "ok", "version_hash": spec.version_hash}
