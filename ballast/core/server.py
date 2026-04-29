@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections import OrderedDict
 from typing import Optional
+
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,14 @@ def _require_token(x_ballast_token: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="unauthorized")
 
 
+def _validate_job_id(job_id: str) -> None:
+    if not _JOB_ID_RE.match(job_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid job_id: must match ^[A-Za-z0-9_-]{{1,128}}$",
+        )
+
+
 @app.get("/spec/{job_id}/current")
 def get_spec(
     job_id: str,
@@ -50,6 +61,7 @@ def get_spec(
 ) -> dict:
     """Return the current spec for this job, or {} if not yet set."""
     _require_token(x_ballast_token)
+    _validate_job_id(job_id)
     if job_id in _current_spec:
         _current_spec.move_to_end(job_id)  # mark as most-recently used
     return _current_spec.get(job_id, {})
@@ -63,6 +75,7 @@ def update_spec(
 ) -> dict:
     """Store the new spec for this job. Returns version_hash for confirmation."""
     _require_token(x_ballast_token)
+    _validate_job_id(job_id)
     if job_id not in _current_spec and len(_current_spec) >= _MAX_JOB_SLOTS:
         # Evict the *least-recently-used* entry (first key in OrderedDict).
         oldest_key, _ = _current_spec.popitem(last=False)

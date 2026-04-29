@@ -17,8 +17,11 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 
 import httpx
+
+_JOB_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
 from ballast.core.spec import SpecModel
 
@@ -37,6 +40,11 @@ class SpecPoller:
     """
 
     def __init__(self, base_url: str, job_id: str) -> None:
+        if not _JOB_ID_RE.match(job_id):
+            raise ValueError(
+                f"Invalid job_id {job_id!r}: must match ^[A-Za-z0-9_-]{{1,128}}$. "
+                "Characters like '/', '?', '#' can corrupt URL routing."
+            )
         self.url = f"{base_url.rstrip('/')}/spec/{job_id}/current"
         self._current: SpecModel | None = None
         self._client = httpx.Client(timeout=2.0)
