@@ -420,7 +420,10 @@ def score_drift(
         )
 
     # ── LLM scorers (Layer 1) ─────────────────────────────────────────────
-    _, constraint_score, intent_score = _run_scorers(node, spec)
+    # tool_score was already computed above; skip it in _run_scorers to avoid
+    # calling score_tool_compliance twice per node.
+    constraint_score = score_constraint_violation(node, spec)
+    intent_score = score_intent_alignment(node, spec)
     aggregate = min(tool_score, constraint_score, intent_score)
 
     # ── Label assignment (Layer 2 when ambiguous and harness allows) ───────
