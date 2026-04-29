@@ -208,9 +208,13 @@ def evaluate_node(
     tool_name, tool_args, content = duck_tool_info(node, content_max=600)
 
     # Build context summary from full_window.
-    # Only dict entries are included — raw pydantic-ai nodes are skipped.
-    # compact_history (already-evicted nodes) arrives as dicts; those are the
-    # entries that carry label/score/tool_name for the LLM's context.
+    # evaluate_node only consumes dict entries from full_window.
+    # When called from run_with_spec, full_window comes pre-processed through
+    # _layer2_evaluator_context(), which compacts raw pydantic-ai nodes into
+    # UNSCORED/0.5 dicts — so all entries are already dicts by this point.
+    # When called from TrajectoryChecker, the same helper is used, so raw nodes
+    # are also compacted before reaching here.
+    # The isinstance(n, dict) guard is kept as a safety net for direct callers.
     context_summary: list[dict] = [n for n in full_window if isinstance(n, dict)]
 
     aggregate = min(tool_score, constraint_score, intent_score)
