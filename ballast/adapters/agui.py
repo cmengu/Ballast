@@ -51,11 +51,12 @@ class AGUIAdapter(AgentStream):
         llm = ChatAnthropic(model=model, api_key=api_key)
         self._graph = create_react_agent(llm, tools=[get_word_count])
 
-    async def stream(self, goal: str, spec: dict) -> AsyncIterator[object]:
+    async def stream(self, goal: str, spec: dict) -> AsyncIterator[object]:  # noqa: ARG002
         """Run the agent against `goal` and yield raw LangGraph events.
 
         Logs every event type + key fields at DEBUG level for observation.
-        `spec` is accepted but unused in observation phase.
+        `spec` is accepted but not yet used — reserved for future constraint
+        enforcement once the adapter moves beyond the observation phase.
         """
         logger.debug("[AGUIAdapter] goal=%r", goal)
 
