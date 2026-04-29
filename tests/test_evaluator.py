@@ -109,14 +109,14 @@ class TestCallEvaluator:
         assert label == "VIOLATED"
         assert rationale == "writes to forbidden path"
 
-    def test_returns_stalled_on_client_exception(self):
+    def test_returns_violated_on_client_exception(self):
         client = MagicMock()
         client.messages.create.side_effect = RuntimeError("network down")
         label, rationale = _call_evaluator(client, _make_packet())
-        assert label == "STALLED"
+        assert label == "VIOLATED"
         assert rationale.startswith("evaluator_error:")
 
-    def test_returns_stalled_on_no_tool_use_block(self):
+    def test_returns_violated_on_no_tool_use_block(self):
         client = MagicMock()
         block = MagicMock()
         block.type = "text"  # not tool_use
@@ -124,10 +124,10 @@ class TestCallEvaluator:
         response.content = [block]
         client.messages.create.return_value = response
         label, rationale = _call_evaluator(client, _make_packet())
-        assert label == "STALLED"
+        assert label == "VIOLATED"
         assert "no valid label" in rationale
 
-    def test_returns_stalled_on_invalid_label(self):
+    def test_returns_violated_on_invalid_label(self):
         client = MagicMock()
         block = MagicMock()
         block.type = "tool_use"
@@ -136,7 +136,7 @@ class TestCallEvaluator:
         response.content = [block]
         client.messages.create.return_value = response
         label, rationale = _call_evaluator(client, _make_packet())
-        assert label == "STALLED"
+        assert label == "VIOLATED"
 
     def test_rationale_included_in_result(self):
         client = _mock_client("PROGRESSING", "all constraints satisfied")
@@ -176,7 +176,7 @@ class TestEvaluateNode:
         assert label == "VIOLATED"
         assert note != ""
 
-    def test_stalled_on_client_exception(self):
+    def test_violated_on_client_exception(self):
         spec = _make_spec()
         node = MagicMock()
         node.tool_name = "t"
@@ -188,7 +188,7 @@ class TestEvaluateNode:
                 node, [], spec,
                 tool_score=0.5, constraint_score=0.5, intent_score=0.5,
             )
-        assert label == "STALLED"
+        assert label == "VIOLATED"
         assert "evaluator_error" in note
 
     def test_empty_full_window_ok(self):
