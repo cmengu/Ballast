@@ -600,7 +600,7 @@ def memory_report(scope: str) -> str:
     border = "═" * 67
     lines = [
         f"╔{border}╗",
-        f"║  Ballast Memory Report — {scope[:39]:<39}  ║",
+        f"║  Ballast Memory Report — {(scope[:36] + '...' if len(scope) > 39 else scope):<39}  ║",
         f"╠{border}╣",
     ]
 
