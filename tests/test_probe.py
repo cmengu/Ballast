@@ -138,24 +138,24 @@ class TestCallProbeAgent:
         assert "write" in result["note"]
 
     @pytest.mark.asyncio
-    async def test_agent_exception_returns_fail_open(self):
+    async def test_agent_exception_returns_fail_closed(self):
         agent = MagicMock()
         agent.run = AsyncMock(side_effect=RuntimeError("network down"))
         packet = ProbePacket(
             tool_name="x", tool_args="{}", tool_result="", spec_constraints=[]
         )
         result = await _call_probe_agent(agent, packet)
-        assert result["verified"] is True
+        assert result["verified"] is False
         assert result["note"].startswith("probe_error:")
 
     @pytest.mark.asyncio
-    async def test_json_parse_error_returns_fail_open(self):
+    async def test_json_parse_error_returns_fail_closed(self):
         agent = _mock_agent("NOT JSON")
         packet = ProbePacket(
             tool_name="x", tool_args="{}", tool_result="", spec_constraints=[]
         )
         result = await _call_probe_agent(agent, packet)
-        assert result["verified"] is True
+        assert result["verified"] is False
         assert result["note"].startswith("probe_error:")
 
     @pytest.mark.asyncio
@@ -207,14 +207,14 @@ class TestVerifyNodeClaim:
         assert note != ""
 
     @pytest.mark.asyncio
-    async def test_probe_exception_returns_fail_open(self):
+    async def test_probe_exception_returns_fail_closed(self):
         spec = _make_spec()
         node = _node_with_tool("some_tool", {})
         mock_agent = MagicMock()
         mock_agent.run = AsyncMock(side_effect=Exception("boom"))
         with patch("ballast.core.probe._get_probe_agent", return_value=mock_agent):
             verified, note = await verify_node_claim(node, "PROGRESSING", spec)
-        assert verified is True
+        assert verified is False
         assert "probe_error" in note
 
     def test_lazy_singleton_not_constructed_at_import(self):

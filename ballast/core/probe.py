@@ -4,12 +4,18 @@ Public interface:
     verify_node_claim(node, label, spec) -> tuple[bool, str]
         — Makes one LLM call to check whether a PROGRESSING node's tool args
           violate any spec constraint. Returns (True, "") on pass, (False, note)
-          on breach, (True, "probe_error: ...") on any exception.
+          on breach.
     ProbePacket
         — Typed input envelope passed to _call_probe_agent().
 
-Fail-safe: _call_probe_agent() never raises. Any exception → (True, "probe_error: ...").
-The probe is supplemental to score_drift(). Fail-open is intentional.
+Failure policy (two distinct cases):
+  • Schema / key missing  — LLM responded but omitted 'verified' key or returned
+    non-dict JSON. Treated as (False, "probe_error: ...") — fail-closed.
+  • Transport / parse exception — LLM call raised (network, timeout, JSON error).
+    Also treated as (False, "probe_error: ...") — fail-closed.
+
+The probe is supplemental to score_drift(). Both hard failures and schema gaps
+now fail closed so a broken probe cannot silently mark a claim as verified.
 """
 from __future__ import annotations
 
@@ -163,11 +169,11 @@ async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "probe_agent_failed tool=%r exc=%s — failing open",
+            "probe_agent_failed tool=%r exc=%s — failing closed",
             packet.tool_name,
             exc,
         )
-        return {"verified": True, "note": f"probe_error: {exc}"}
+        return {"verified": False, "note": f"probe_error: {exc}"}
 
 
 # ---------------------------------------------------------------------------
