@@ -2,11 +2,11 @@
 
 Public interface:
     evaluate_node(node, full_window, spec, *, tool_score, constraint_score, intent_score)
-        -> tuple[str, str]  (label: "PROGRESSING"|"VIOLATED"|"STALLED", rationale: str)
+        -> tuple[str, str]  (label: "PROGRESSING"|"VIOLATED", rationale: str)
         — Called by score_drift() for nodes in the ambiguous zone (0.25 < aggregate < 0.85).
           full_window is a list of compact dicts (see _layer2_evaluator_context in trajectory).
-          Returns ("STALLED", "evaluator_error: ...") on any LLM / parse exception (fail-open).
-          Also returns "STALLED" when the LLM emits an unrecognised label — never crashes.
+          Fail-closed: any LLM / transport / parse failure maps to ("VIOLATED", ...) — never
+          crashes. Unrecognised LLM labels are also treated as VIOLATED.
     EvaluatorPacket
         — Typed input envelope passed to _call_evaluator().
 
@@ -185,7 +185,7 @@ def evaluate_node(
     constraint_score: float,
     intent_score: float,
 ) -> tuple[str, str]:
-    """Resolve a STALLED node to PROGRESSING or VIOLATED using a Layer 2 LLM call.
+    """Resolve an ambiguous-zone node to PROGRESSING or VIOLATED using a Layer 2 LLM call.
 
     Called by score_drift() when 0.25 < aggregate < 0.85 (the ambiguous zone).
     Synchronous — score_drift() is synchronous; no event loop involved.
