@@ -207,16 +207,18 @@ def atomic_write_json(path: Path, data: dict) -> None:
         prefix=path.name + ".",
         dir=str(path.parent),
     )
-    fd_open = True
+    fp = None
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        fd_open = False
+        fp = os.fdopen(fd, "w", encoding="utf-8")
+        with fp:
+            json.dump(data, fp, indent=2)
+            fp.flush()
+            os.fsync(fp.fileno())
         os.replace(tmp_path, path)
     except Exception:
-        if fd_open:
+        # If os.fdopen failed, fd is still open. If fdopen succeeded, ``with fp``
+        # closed the fd — never call os.close(fd) in that case (double-close).
+        if fp is None:
             try:
                 os.close(fd)
             except OSError:
