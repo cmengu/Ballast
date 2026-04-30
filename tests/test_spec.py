@@ -173,6 +173,24 @@ def test_parse_spec_file_not_found_raises():
         parse_spec("/tmp/nonexistent_ballast_spec_xyz.md")
 
 
+def test_parse_spec_base_dir_allows_relative_path(tmp_path):
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    p = nested / "s.md"
+    p.write_text("## intent\nx\n## success criteria\n- y\n", encoding="utf-8")
+    spec = parse_spec("nested/s.md", base_dir=tmp_path)
+    assert spec.intent == "x"
+
+
+def test_parse_spec_base_dir_rejects_path_escape(tmp_path):
+    safe = tmp_path / "safe.md"
+    safe.write_text("## intent\nx\n## success criteria\n- y\n", encoding="utf-8")
+    sub = tmp_path / "subdir"
+    sub.mkdir()
+    with pytest.raises(SpecParseError, match="escapes"):
+        parse_spec("../safe.md", base_dir=sub)
+
+
 def test_parse_spec_uses_defaults_when_threshold_section_missing():
     content = "## intent\ndo something\n## success criteria\n- thing\n"
     path = _write_spec(content)

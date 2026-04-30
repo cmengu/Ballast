@@ -1,7 +1,7 @@
 """ballast/core/spec.py — Intent grounding layer.
 
 Public interface:
-    parse_spec(path)        — reads spec.md, returns draft SpecModel (locked_at='')
+    parse_spec(path [, base_dir=]) — reads spec.md; optional base_dir confines path
     score_specificity(spec) — LLM: how verifiable is this spec? 0.0–1.0
     clarify(spec)           — LLM: enrich vague fields; raises SpecTooVague if impossible
     lock(spec)              — stamps version_hash + locked_at; returns immutable-by-convention copy
@@ -31,8 +31,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Literal
 
 import anthropic
@@ -305,25 +307,50 @@ def _get_client() -> "anthropic.Anthropic":
 # parse_spec — reads spec.md
 # ---------------------------------------------------------------------------
 
-def parse_spec(path: str) -> SpecModel:
+def parse_spec(
+    path: str | os.PathLike[str],
+    *,
+    base_dir: str | os.PathLike[str] | None = None,
+) -> SpecModel:
     """Read a spec.md file and return a draft SpecModel (locked_at='', version_hash='').
 
     Parses the ## intent, ## success criteria, ## constraints,
     ## irreversible actions, ## scope, ## escalation threshold,
     and ## tools allowed sections.
 
+    If ``base_dir`` is given, ``path`` is resolved under that directory and must
+    not escape it (after ``Path.resolve()``). Use this when ``path`` comes from
+    user-controlled input. When ``base_dir`` is omitted, the caller must ensure
+    ``path`` is trusted — this function performs no path traversal checks.
+
     Raises SpecParseError if:
         - file not found
         - ## intent section is missing or empty
         - ## success criteria section is missing or has no bullet items
+        - ``path`` escapes ``base_dir`` when ``base_dir`` is set
     """
+    p = Path(path)
+    if base_dir is not None:
+        base = Path(base_dir).resolve()
+        candidate = p if p.is_absolute() else (base / p)
+        candidate = candidate.resolve(strict=False)
+        try:
+            candidate.relative_to(base)
+        except ValueError as exc:
+            raise SpecParseError(
+                f"spec path {path!r} escapes base_dir {str(base)!r}"
+            ) from exc
+        path_str = str(candidate)
+    else:
+        path_str = os.fspath(path)
+
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path_str, "r", encoding="utf-8") as f:
             text = f.read()
     except FileNotFoundError:
-        raise SpecParseError(f"spec file not found: {path}")
+        raise SpecParseError(f"spec file not found: {path_str}")
     except OSError as exc:
-        raise SpecParseError(f"cannot read spec file {path!r}: {exc}") from exc
+        raise SpecParseError(f"cannot read spec file {path_str!r}: {exc}") from exc
 
     def _section(name: str) -> str:
         """Text between ## name and the next ## heading (or EOF). Case-insensitive."""
@@ -529,6 +556,9 @@ def clarify(spec: SpecModel) -> SpecModel:
     Raises SpecTooVague(missing_fields) if LLM cannot infer required fields.
 
     Caller decides when to call this — typically when score_specificity() < 0.6.
+    Asymmetry: ``score_specificity`` is fail-closed (0.0 when the judge fails).
+    ``clarify`` is intentionally fail-open on LLM failure — it returns the
+    original draft unchanged so the embedder can retry or surface an error.
 
     Scope: clarify() enriches intent, success_criteria, and constraints only.
     It never modifies irreversible_actions — those are security boundaries set
