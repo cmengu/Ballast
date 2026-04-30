@@ -192,6 +192,20 @@ def test_return_value_tuple():
     assert isinstance(audit_log, list)
 
 
+def test_return_value_uses_result_data_when_only_data_set():
+    """Parity with run_with_spec: result object exposes .data but not .output."""
+    from types import SimpleNamespace
+
+    nodes = [_MockNode()]
+    agent, run = _make_agent(nodes, output="ignored")
+    run.result = SimpleNamespace(data="payload from data only")
+    poller = _make_poller([None])
+    spec = _locked_spec()
+
+    output, _ = asyncio.run(run_with_live_spec(agent, "task", spec, poller))
+    assert output == "payload from data only"
+
+
 def test_node_logged_at_debug(caplog):
     """Each node is logged at DEBUG: 'node=00 spec=XXXXXXXX type=_MockNode'."""
     import logging
