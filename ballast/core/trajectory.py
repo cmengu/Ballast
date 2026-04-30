@@ -35,6 +35,7 @@ from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
 from ballast.adapters.otel import emit_drift_span
+from ballast.core.agent_output import agent_run_result_payload
 from ballast.core.constants import SONNET_MODEL
 from ballast.core.node_tools import extract_node_info as _extract_node_info
 from ballast.core.checkpoint import CHECKPOINT_FILE, BallastProgress, NodeSummary, _MAX_NODE_SUMMARIES
@@ -167,7 +168,7 @@ def _coerce_bool(val: object, default: bool = False) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Scorer 2 — constraint violation (LLM, fail-safe 0.5)
+# Scorer 2 — constraint violation (LLM, fail-closed 0.0)
 # ---------------------------------------------------------------------------
 
 _CONSTRAINT_SYSTEM = (
@@ -244,7 +245,7 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
 
 
 # ---------------------------------------------------------------------------
-# Scorer 3 — intent alignment (LLM, fail-safe 0.5)
+# Scorer 3 — intent alignment (LLM, fail-closed 0.0)
 # ---------------------------------------------------------------------------
 
 _INTENT_SYSTEM = (
@@ -354,7 +355,7 @@ def _run_scorers(node: Any, spec: SpecModel) -> tuple[float, float, float]:
     """Call all three scorers and return (tool_score, constraint_score, intent_score).
 
     Private helper. Eliminates scorer duplication between score_drift() (LLM path)
-    and TrajectoryChecker.check(). Never raises — each scorer has its own fail-safe.
+    and TrajectoryChecker.check(). Never raises — each scorer has its own fail-closed policy.
     """
     return (
         score_tool_compliance(node, spec),
@@ -411,7 +412,8 @@ def score_drift(
 
     if not content and not tool_name:
         # Empty nodes (e.g. pydantic-ai bookkeeping events) have no signal to score.
-        # STALLED is the neutral, conservative label — not a claim of alignment.
+        # score=1.0 avoids dragging drift thresholds; label STALLED means
+        # "no scoreable signal" (bookkeeping / empty), not "progress halted".
         return NodeAssessment(
             score=1.0, label="STALLED",
             rationale="no scoreable content",
@@ -611,19 +613,12 @@ class TrajectoryChecker:
         # Uses the tracked full_window so context accumulates across check() calls.
         if aggregate > 0.25 and aggregate < 0.85 and self.spec.harness.enable_layer2_judge:
             layer2_ctx = _layer2_evaluator_context(None, self._full_window)
-            try:
-                layer2_label, _ = evaluate_node(
-                    node, layer2_ctx, self.spec,
-                    tool_score=tool_score,
-                    constraint_score=constraint_score,
-                    intent_score=intent_score,
-                )
-            except (anthropic.APIError, anthropic.APIConnectionError, OSError, ValueError) as _exc:
-                logger.warning(
-                    "trajectory_checker_layer2_failed step=%d exc=%s — using STALLED",
-                    self._step, _exc,
-                )
-                layer2_label = "STALLED"
+            layer2_label, _ = evaluate_node(
+                node, layer2_ctx, self.spec,
+                tool_score=tool_score,
+                constraint_score=constraint_score,
+                intent_score=intent_score,
+            )
         else:
             layer2_label = ""
 
@@ -995,7 +990,7 @@ async def run_with_spec(
         return await agent_run.get_output()
     result = getattr(agent_run, "result", None)
     if result is not None:
-        return getattr(result, "data", getattr(result, "output", result))
+        return agent_run_result_payload(result)
     logger.warning(
         "run_with_spec: output extraction failed. spec_version=%s run_id=%s",
         spec.version_hash, run_id,

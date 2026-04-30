@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic_ai import Agent
 
+from ballast.core.agent_output import agent_run_result_payload
 from ballast.core.constants import HAIKU_MODEL
 from ballast.core.node_tools import extract_node_info
 from ballast.core.spec import SpecModel
@@ -192,7 +193,9 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
             + ctx_lines
         )
         result = await agent.run(prompt)
-        raw = result.output if hasattr(result, "output") else str(result)
+        raw = agent_run_result_payload(result)
+        if not isinstance(raw, str):
+            raw = str(raw)
         parsed = json.loads(_extract_json(raw))
         if not isinstance(parsed, dict):
             logger.warning(

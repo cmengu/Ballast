@@ -30,6 +30,7 @@ from typing import Any, Awaitable, Callable, Optional, Union
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelRequest, UserPromptPart
 
+from ballast.core.agent_output import agent_run_result_payload
 from ballast.core.spec import SpecDelta, SpecModel, is_locked
 from ballast.core.sync import SpecPoller
 
@@ -130,11 +131,7 @@ async def run_with_live_spec(
     else:
         result = getattr(run, "result", None)
         if result is not None:
-            # Prefer .data (pydantic-ai >=0.0.20), fall back to .output (older)
-            if "data" in type(result).__dict__ or (hasattr(result, "__dataclass_fields__") and "data" in result.__dataclass_fields__):
-                output = result.data
-            else:
-                output = getattr(result, "output", result)
+            output = agent_run_result_payload(result)
         else:
             logger.warning("run_with_live_spec: output extraction failed")
             output = None

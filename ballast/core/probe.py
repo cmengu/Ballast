@@ -27,6 +27,7 @@ from typing import Any
 
 from pydantic_ai import Agent
 
+from ballast.core.agent_output import agent_run_result_payload
 from ballast.core.constants import HAIKU_MODEL
 from ballast.core.node_tools import duck_tool_info
 from ballast.core.spec import SpecModel
@@ -81,7 +82,9 @@ _PROBE_SYSTEM = (
     '{"verified": false, "note": "<which constraint was breached and why>"} '
     "if a constraint is clearly violated. "
     "Be strict: if the tool args unambiguously match a constraint violation, flag it. "
-    "If unsure, return verified: true."
+    "If you cannot verify compliance with the constraints from the given facts, treat "
+    "that as unverified: return {\"verified\": false, \"note\": \"cannot verify\"} "
+    "(fail-closed — never guess \"verified\" when uncertain)."
 )
 
 # Lazy singleton — NOT constructed at module level.
@@ -153,7 +156,9 @@ async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
     )
     try:
         result = await agent.run(prompt)
-        raw = result.output if hasattr(result, "output") else str(result)
+        raw = agent_run_result_payload(result)
+        if not isinstance(raw, str):
+            raw = str(raw)
         parsed = json.loads(_extract_json(raw))
         if not isinstance(parsed, dict):
             return {"verified": False, "note": "probe_error: non-object JSON"}
