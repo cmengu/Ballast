@@ -31,6 +31,21 @@ _MOCK_A_PROGRESSING = NodeAssessment(
 )
 
 
+def test_agent_guard_rejects_non_positive_cap():
+    with pytest.raises(ValueError, match="strictly positive"):
+        AgentCostGuard("w", agent_cap_usd=0.0, escalation_pool_usd=0.1)
+    with pytest.raises(ValueError, match="finite non-negative"):
+        AgentCostGuard("w", agent_cap_usd=0.1, escalation_pool_usd=-0.01)
+    with pytest.raises(ValueError, match="finite non-negative"):
+        AgentCostGuard("w", agent_cap_usd=-1.0, escalation_pool_usd=0.1)
+
+
+def test_run_guard_register_rejects_non_positive_cap():
+    rg = RunCostGuard(hard_cap_usd=10.0)
+    with pytest.raises(ValueError, match="strictly positive"):
+        rg.register("w", cap=0.0, escalation_pool=0.0)
+
+
 # ---------------------------------------------------------------------------
 # AgentCostGuard
 # ---------------------------------------------------------------------------

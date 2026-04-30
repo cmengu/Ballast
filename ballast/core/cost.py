@@ -92,6 +92,14 @@ class AgentCostGuard:
     _spent: float = field(default=0.0, init=False, repr=False)
     _escalation_spent: float = field(default=0.0, init=False, repr=False)
 
+    def __post_init__(self) -> None:
+        cap = self._validate_amount(self.agent_cap_usd, "agent_cap_usd")
+        pool = self._validate_amount(self.escalation_pool_usd, "escalation_pool_usd")
+        if cap <= 0:
+            raise ValueError("agent_cap_usd must be strictly positive")
+        object.__setattr__(self, "agent_cap_usd", cap)
+        object.__setattr__(self, "escalation_pool_usd", pool)
+
     @staticmethod
     def _validate_amount(amount: float, name: str = "amount") -> float:
         """Coerce and validate a cost amount. Raises ValueError for unsafe values."""
