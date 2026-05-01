@@ -5,8 +5,8 @@ Public interface:
     AgentCapExceeded          — raised when an agent's per-agent cap is breached
     EscalationBudgetExceeded  — raised when escalation pool is exhausted
     HardCapExceeded           — raised when global run hard cap would be exceeded
-    AgentCostGuard            — per-agent cap enforcer: check() then record()
-    RunCostGuard              — global enforcer; owns all AgentCostGuards for a run
+    AgentCostGuard       — per-agent cap; prefer check_and_record(); avoid record() alone
+    RunCostGuard         — global enforcer; owns all AgentCostGuards for a run
 
 Usage:
     guard = RunCostGuard(hard_cap_usd=300.0)   # defaults to HARD_CAP_USD
