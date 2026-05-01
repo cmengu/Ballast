@@ -1,7 +1,9 @@
 """ballast/core/server.py — Spec update server (M5 side).
 
-Holds the current locked SpecModel per job_id in memory.
-Exposes two endpoints for the M2 SpecPoller to consume.
+Holds the current locked SpecModel per job_id in memory (max ``_MAX_JOB_SLOTS`` jobs).
+When full, the **least-recently-used** job is evicted on the next POST — that job's
+clients will GET ``{}`` until a new spec is pushed. Exposes two endpoints for the
+M2 SpecPoller to consume.
 
 Import: from ballast.core.server import app
 Run via: python scripts/server.py
