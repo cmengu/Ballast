@@ -39,8 +39,9 @@ def build_correction(
 ) -> str:
     """Build the soft correction string injected between nodes on drift.
 
-    Called by run_with_spec when assessment.score < spec.drift_threshold
-    and assessment.label is not VIOLATED_IRREVERSIBLE. The returned string
+    Called by run_with_spec when ``assessment.score < spec.drift_threshold``
+    **or** ``assessment.label == "VIOLATED"`` (e.g. Layer-2 or probe verdict
+    after an ambiguous numeric band). Not used for ``VIOLATED_IRREVERSIBLE``.
     is injected as a UserPromptPart between nodes — it does not stop the
     agent, only redirects it toward spec alignment.
 
