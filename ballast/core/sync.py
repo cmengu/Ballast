@@ -37,6 +37,10 @@ class SpecPoller:
     A single shared httpx.Client is reused across all poll() calls to avoid
     per-call TCP connection setup overhead. It is closed when the poller is
     used as a context manager or when close() is called explicitly.
+
+    **Thread safety:** ``httpx.Client`` is not documented as safe for concurrent
+    use from multiple threads. Use one ``SpecPoller`` per thread, or serialize
+    ``poll()`` with a lock if sharing.
     """
 
     def __init__(self, base_url: str, job_id: str) -> None:
