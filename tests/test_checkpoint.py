@@ -87,6 +87,33 @@ def test_node_summary_spec_hash_survives_round_trip(tmp_path):
     assert p2.completed_node_summaries[0].spec_hash == "updated-hash"
 
 
+def test_round_trip_large_checkpoint_payload(tmp_path):
+    """Regression: full JSON must survive write+read (no partial os.write)."""
+    path = str(tmp_path / "progress.json")
+    p = _make_progress()
+    long_tool = "t" * 4000
+    for i in range(100):
+        p.completed_node_summaries.append(
+            NodeSummary(
+                index=i,
+                tool_name=long_tool,
+                label="PROGRESSING",
+                drift_score=0.9,
+                cost_usd=0.001,
+                verified=True,
+                spec_hash="abc00001",
+                timestamp="2026-01-01T00:00:00Z",
+            )
+        )
+    p.write(path)
+    raw = Path(path).read_text(encoding="utf-8")
+    p2 = BallastProgress.read(path)
+    assert p2 is not None
+    assert len(p2.completed_node_summaries) == 100
+    assert p2.completed_node_summaries[0].tool_name == long_tool
+    assert len(json.loads(raw)["completed_node_summaries"]) == 100
+
+
 def test_read_returns_none_when_file_missing(tmp_path):
     result = BallastProgress.read(str(tmp_path / "nonexistent.json"))
     assert result is None
