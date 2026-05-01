@@ -318,10 +318,10 @@ def parse_spec(
     ## irreversible actions, ## scope, ## escalation threshold,
     and ## tools allowed sections.
 
-    If ``base_dir`` is given, ``path`` is resolved under that directory and must
-    not escape it (after ``Path.resolve()``). Use this when ``path`` comes from
-    user-controlled input. When ``base_dir`` is omitted, the caller must ensure
-    ``path`` is trusted — this function performs no path traversal checks.
+    If ``base_dir`` is given, ``path`` is resolved under that directory, **after
+    resolving symlinks** on both paths, and must stay inside ``base_dir``. Use this
+    when ``path`` comes from user-controlled input. When ``base_dir`` is omitted,
+    the caller must ensure ``path`` is trusted — this function performs no path checks.
 
     Raises SpecParseError if:
         - file not found
@@ -334,13 +334,15 @@ def parse_spec(
         base = Path(base_dir).resolve()
         candidate = p if p.is_absolute() else (base / p)
         candidate = candidate.resolve(strict=False)
+        base_real = Path(os.path.realpath(base))
+        cand_real = Path(os.path.realpath(candidate))
         try:
-            candidate.relative_to(base)
+            cand_real.relative_to(base_real)
         except ValueError as exc:
             raise SpecParseError(
-                f"spec path {path!r} escapes base_dir {str(base)!r}"
+                f"spec path {path!r} escapes base_dir {str(base)!r} (traversal or symlink)"
             ) from exc
-        path_str = str(candidate)
+        path_str = str(cand_real)
     else:
         path_str = os.fspath(path)
 

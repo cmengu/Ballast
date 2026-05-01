@@ -191,6 +191,20 @@ def test_parse_spec_base_dir_rejects_path_escape(tmp_path):
         parse_spec("../safe.md", base_dir=sub)
 
 
+def test_parse_spec_base_dir_rejects_symlink_escape(tmp_path):
+    jail = tmp_path / "jail"
+    jail.mkdir()
+    outside = tmp_path / "outside.md"
+    outside.write_text("## intent\nleak\n## success criteria\n- z\n", encoding="utf-8")
+    link = jail / "trap"
+    try:
+        link.symlink_to(outside)
+    except OSError:
+        pytest.skip("symlink creation not supported")
+    with pytest.raises(SpecParseError, match="escapes"):
+        parse_spec("trap", base_dir=jail)
+
+
 def test_parse_spec_uses_defaults_when_threshold_section_missing():
     content = "## intent\ndo something\n## success criteria\n- thing\n"
     path = _write_spec(content)
