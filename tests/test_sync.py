@@ -151,3 +151,18 @@ def test_poller_returns_none_on_non_200_status():
     mock_r.status_code = 500
     with patch.object(poller._client, "get", return_value=mock_r):
         assert poller.poll() is None
+
+
+@pytest.mark.parametrize(
+    "job_id",
+    ["bad@id", "has.dot", "x" * 129, "unicode£"],
+)
+def test_server_rejects_invalid_job_id(job_id):
+    r = client.get(f"/spec/{job_id}/current")
+    assert r.status_code == 400
+
+
+@pytest.mark.parametrize("job_id", ["bad@id", "x" * 129])
+def test_poller_constructor_rejects_invalid_job_id(job_id):
+    with pytest.raises(ValueError, match="Invalid job_id"):
+        SpecPoller("http://localhost:8765", job_id)
