@@ -1,6 +1,9 @@
 """AG-UI adapter — LangGraph ReAct agent streaming AG-UI events.
 
 OBSERVATION PHASE: events are logged at DEBUG level.
+Deep payload dumps (chunks, tool args) require ``BALLAST_AGUI_VERBOSE_DEBUG=1`` —
+without it, only event type/name lines are logged to avoid leaking prompts in production.
+
 Promote to INFO or wire into trajectory validator in a future step.
 """
 from __future__ import annotations
@@ -18,6 +21,11 @@ from ballast.core.stream import AgentStream
 
 logger = logging.getLogger(__name__)
 
+# Full event payloads at DEBUG may include user prompts. Enable only when needed.
+_AGUI_VERBOSE_DEBUG = os.environ.get("BALLAST_AGUI_VERBOSE_DEBUG", "").strip().lower() in {
+    "1", "true", "yes",
+}
+
 
 @tool
 def get_word_count(text: str) -> int:
@@ -31,6 +39,8 @@ class AGUIAdapter(AgentStream):
     Uses LangGraph astream_events (v2) as the event source.
     Each LangGraph event is emitted as a DEBUG log so the event sequence
     can be observed before trajectory validation logic is built on top.
+    Set environment variable ``BALLAST_AGUI_VERBOSE_DEBUG=1`` to also log
+    truncated payloads (may include user content).
 
     Answers on first real run:
       1. Which event types fire on each step?
@@ -74,7 +84,7 @@ class AGUIAdapter(AgentStream):
 
             # Log data fields that answer the observation questions.
             data = event.get("data", {})
-            if data:
+            if data and _AGUI_VERBOSE_DEBUG:
                 if event_type in ("on_chain_start", "on_chain_end", "on_chain_stream"):
                     chunk = data.get("chunk") or data.get("output") or data.get("input")
                     if chunk is not None:
