@@ -19,6 +19,7 @@ Schema:
 Public interface:
     recall, write, extract_quirks, log_run, consolidate,
     atomic_write_json, memory_report, patch_quirk
+    MemoryLockTimeout — raised when write/log_run/consolidate cannot acquire the scope lock
 """
 from __future__ import annotations
 
@@ -28,15 +29,18 @@ import math
 import os
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-import uuid
-
 import anthropic
 from filelock import FileLock, Timeout as FileLockTimeout
 from pydantic import BaseModel
+
+
+class MemoryLockTimeout(Exception):
+    """The scope file lock could not be acquired after retries (see `_acquire_with_retry`)."""
 
 # CWD-relative default. Override with BALLAST_MEMORY_DIR env var or by calling
 # set_memory_dir() before any memory operations in a process.
@@ -126,10 +130,8 @@ def _scope_lock(path: Path) -> FileLock:
 def _acquire_with_retry(lock: FileLock, label: str) -> bool:
     """Try to acquire *lock* once, sleep, then retry once more.
 
-    Returns True if acquired. Returns False (and logs a warning) after two
-    failures, so callers can skip the write rather than silently drop data
-    without any diagnostic.  Two attempts cover short transient contention;
-    long contention (stale lock file, crashed process) is surfaced quickly.
+    Returns True if acquired. Returns False after two failures (caller should
+    log at ERROR and raise ``MemoryLockTimeout`` — do not drop updates silently).
     """
     for attempt in (1, 2):
         try:
@@ -142,7 +144,11 @@ def _acquire_with_retry(lock: FileLock, label: str) -> bool:
                     label, attempt, 2, _LOCK_RETRY_SLEEP_SECONDS,
                 )
                 time.sleep(_LOCK_RETRY_SLEEP_SECONDS)
-    logger.warning("%s: lock timeout after 2 attempts — operation skipped", label)
+    logger.error(
+        "%s: lock timeout after %d attempts — memory not persisted",
+        label,
+        2,
+    )
     return False
 
 
@@ -290,6 +296,9 @@ def write(scope: str, new_observations: list[str]) -> None:
     Unseen observations in this batch → decay only (no increment).
 
     Decay uses long-term half-life (30 days) — appropriate for cross-run memory.
+
+    Raises:
+        MemoryLockTimeout: if the scope lock cannot be acquired after retries.
     """
     new_observations = list(
         dict.fromkeys(o.strip() for o in new_observations if o and o.strip())
@@ -300,7 +309,7 @@ def write(scope: str, new_observations: list[str]) -> None:
     path = _scope_path(scope)
     lock = _scope_lock(path)
     if not _acquire_with_retry(lock, f"write(scope={scope!r})"):
-        return
+        raise MemoryLockTimeout(f"write(scope={scope!r})")
     try:
         if path.exists():
             try:
@@ -420,11 +429,14 @@ def log_run(
     is_trial=True marks eval-mode runs excluded from consolidation.
     success=False marks failed runs excluded from semantic synthesis.
     This function owns run_count — write() does not touch it.
+
+    Raises:
+        MemoryLockTimeout: if the scope lock cannot be acquired after retries.
     """
     path = _scope_path(scope)
     lock = _scope_lock(path)
     if not _acquire_with_retry(lock, f"log_run(scope={scope!r})"):
-        return
+        raise MemoryLockTimeout(f"log_run(scope={scope!r})")
     try:
         if path.exists():
             try:
@@ -467,7 +479,10 @@ def consolidate(scope: str) -> bool:
       - is_trial=True runs excluded (eval goals bias the profile)
       - success=False runs excluded (failed runs contaminate the synthesis)
 
-    Returns True if consolidation ran. Never raises.
+    Returns True if consolidation ran.
+
+    Raises:
+        MemoryLockTimeout: if the scope lock cannot be acquired after retries.
     """
     path = _scope_path(scope)
     if not path.exists():
@@ -475,7 +490,7 @@ def consolidate(scope: str) -> bool:
 
     lock = _scope_lock(path)
     if not _acquire_with_retry(lock, f"consolidate(scope={scope!r})"):
-        return False
+        raise MemoryLockTimeout(f"consolidate(scope={scope!r})")
     try:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
