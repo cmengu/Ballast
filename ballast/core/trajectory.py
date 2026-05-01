@@ -354,8 +354,12 @@ DriftLabel = Literal["PROGRESSING", "STALLED", "VIOLATED", "VIOLATED_IRREVERSIBL
 def _run_scorers(node: Any, spec: SpecModel) -> tuple[float, float, float]:
     """Call all three scorers and return (tool_score, constraint_score, intent_score).
 
-    Private helper. Eliminates scorer duplication between score_drift() (LLM path)
-    and TrajectoryChecker.check(). Never raises — each scorer has its own fail-closed policy.
+    Used by ``TrajectoryChecker.check()`` (and similar call sites) when all three
+    dimensions are needed in one tuple.
+
+    ``score_drift()`` does not call this helper: it runs ``score_tool_compliance``
+    first for early-exit, then calls the LLM scorers separately to avoid redundant
+    tool compliance work. Never raises — each scorer has its own fail-closed policy.
     """
     return (
         score_tool_compliance(node, spec),
