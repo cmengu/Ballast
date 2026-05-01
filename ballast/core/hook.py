@@ -4,7 +4,7 @@ Public interface:
     run_with_live_spec(agent, task, spec, poller, on_node=None)
 
 Wires Agent.iter + SpecPoller + SpecDelta injection:
-    - At every node boundary: poll for spec update
+    - On spec poll cadence (harness.spec_poll_interval_nodes, same as run_with_spec): poll M5
     - On spec change: inject SpecDelta.as_injection() into message_history
     - Stamp every node in the audit log with active spec_hash + node_type
     - Log at DEBUG: "node 00 | spec:a3f2xxxx | NodeTypeName"
@@ -44,9 +44,11 @@ async def run_with_live_spec(
     poller: SpecPoller,
     on_node: Optional[Union[Callable[..., Awaitable[None]], Callable[..., None]]] = None,
 ) -> tuple[Any, list[dict]]:
-    """Run agent with live spec polling at every node boundary.
+    """Run agent with live spec polling on the active spec harness poll interval.
 
-    Polls poller at every node. On spec version change:
+    Polls when ``node_index % max(1, active_spec.harness.spec_poll_interval_nodes) == 0``
+    (matches ``run_with_spec`` so hook and orchestrator impose the same M5 load).
+    On spec version change:
       - computes SpecDelta via active_spec.diff(new_spec)
       - injects delta.as_injection() into run.ctx.state.message_history
       - updates active_spec to the new spec
@@ -78,9 +80,12 @@ async def run_with_live_spec(
 
     async with agent.iter(task) as run:
         async for node in run:
-            # Poll for spec update at every node boundary
             delta: Optional[SpecDelta] = None
-            new_spec = await asyncio.to_thread(poller.poll)
+            _poll_every = max(1, active_spec.harness.spec_poll_interval_nodes)
+            if node_index % _poll_every == 0:
+                new_spec = await asyncio.to_thread(poller.poll)
+            else:
+                new_spec = None
             if new_spec:
                 if not is_locked(new_spec):
                     logger.warning(

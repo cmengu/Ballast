@@ -1,6 +1,6 @@
 """tests/test_hook.py — run_with_live_spec unit tests.
 
-All 8 tests are unit tests: no LLM calls, no HTTP calls.
+All 9 tests are unit tests: no LLM calls, no HTTP calls.
 Agent and SpecPoller are replaced with lightweight fakes.
 Tests are sync functions using asyncio.run() — matches project convention.
 
@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 from pydantic_ai.messages import ModelRequest
 
 from ballast.core.hook import run_with_live_spec
-from ballast.core.spec import SpecModel, lock
+from ballast.core.spec import HarnessProfile, SpecModel, lock
 
 
 # ---------------------------------------------------------------------------
@@ -242,3 +242,14 @@ def test_on_node_callback_called_with_correct_args():
     assert calls[1][0] == 1
     assert calls[0][2] == spec.version_hash
     assert calls[0][3] is None   # no delta at node 0
+
+
+def test_poll_respects_harness_spec_poll_interval_nodes():
+    """Match run_with_spec: poll M5 only every spec_poll_interval_nodes."""
+    harness = HarnessProfile(spec_poll_interval_nodes=2)
+    spec_v1 = lock(SpecModel(intent="a", success_criteria=["d"], harness=harness))
+    nodes = [_MockNode(), _MockNode(), _MockNode()]
+    agent, _ = _make_agent(nodes)
+    poller = _make_poller([None, None, None])
+    asyncio.run(run_with_live_spec(agent, "task", spec_v1, poller))
+    assert poller.poll.call_count == 2
