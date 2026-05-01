@@ -165,11 +165,11 @@ def _call_evaluator(
         return "VIOLATED", "no valid label from evaluator — fail-closed"
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "evaluator_failed tool=%r exc=%s — failing closed to VIOLATED",
+            "evaluator_failed tool=%r — failing closed to VIOLATED",
             packet.tool_name,
-            exc,
+            exc_info=True,
         )
-        return "VIOLATED", f"evaluator_error: {exc}"
+        return "VIOLATED", f"evaluator_error: {type(exc).__name__}"
 
 
 # ---------------------------------------------------------------------------

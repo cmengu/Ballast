@@ -114,7 +114,7 @@ class TestCallEvaluator:
         client.messages.create.side_effect = RuntimeError("network down")
         label, rationale = _call_evaluator(client, _make_packet())
         assert label == "VIOLATED"
-        assert rationale.startswith("evaluator_error:")
+        assert rationale == "evaluator_error: RuntimeError"
 
     def test_returns_violated_on_no_tool_use_block(self):
         client = MagicMock()
@@ -189,7 +189,7 @@ class TestEvaluateNode:
                 tool_score=0.5, constraint_score=0.5, intent_score=0.5,
             )
         assert label == "VIOLATED"
-        assert "evaluator_error" in note
+        assert note == "evaluator_error: Exception"
 
     def test_empty_full_window_ok(self):
         """evaluate_node must not crash when full_window is empty."""
