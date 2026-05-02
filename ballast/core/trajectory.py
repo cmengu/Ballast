@@ -974,6 +974,12 @@ async def run_with_spec(
         except (HardInterrupt, KeyboardInterrupt):
             progress.write(checkpoint_path)
             raise
+        except asyncio.CancelledError:
+            # CancelledError is BaseException in Python 3.8+; it bypasses
+            # `except Exception`. Checkpoint before propagating so the latest
+            # node progress is not lost when the task is cancelled externally.
+            progress.write(checkpoint_path)
+            raise
         except GeneratorExit:
             # GeneratorExit is a BaseException used by the generator protocol.
             # Checkpoint before propagating so the run state is not lost, but
