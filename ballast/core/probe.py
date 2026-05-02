@@ -174,11 +174,11 @@ async def _call_probe_agent(agent: Agent, packet: ProbePacket) -> dict:
         }
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "probe_agent_failed tool=%r exc=%s — failing closed",
+            "probe_agent_failed tool=%r — failing closed",
             packet.tool_name,
-            exc,
+            exc_info=True,
         )
-        return {"verified": False, "note": f"probe_error: {exc}"}
+        return {"verified": False, "note": f"probe_error: {type(exc).__name__}"}
 
 
 # ---------------------------------------------------------------------------

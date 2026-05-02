@@ -146,7 +146,7 @@ class TestCallProbeAgent:
         )
         result = await _call_probe_agent(agent, packet)
         assert result["verified"] is False
-        assert result["note"].startswith("probe_error:")
+        assert result["note"] == "probe_error: RuntimeError"
 
     @pytest.mark.asyncio
     async def test_json_parse_error_returns_fail_closed(self):
