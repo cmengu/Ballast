@@ -238,8 +238,9 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
                 return 0.0 if _coerce_bool(block.input.get("violation", False)) else 1.0
     except Exception as e:
         logger.warning(
-            "constraint_scorer_failed node=%s — returning 0.0 (fail-closed): %s",
-            type(node).__name__, e,
+            "constraint_scorer_failed node=%s exc_type=%s — returning 0.0 (fail-closed)",
+            type(node).__name__, type(e).__name__,
+            exc_info=True,
         )
     return 0.0  # Fail-closed: treat as violation when judge is unavailable
 
@@ -317,8 +318,9 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
                 return max(0.0, min(1.0, score))
     except Exception as e:
         logger.warning(
-            "intent_scorer_failed node=%s — returning 0.0 (fail-closed): %s",
-            type(node).__name__, e,
+            "intent_scorer_failed node=%s exc_type=%s — returning 0.0 (fail-closed)",
+            type(node).__name__, type(e).__name__,
+            exc_info=True,
         )
     return 0.0  # Fail-closed: treat as no-intent when judge is unavailable
 
