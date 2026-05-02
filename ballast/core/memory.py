@@ -250,7 +250,10 @@ def recall(scope: str) -> str:
 
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except json.JSONDecodeError:
+        logger.warning("recall: corrupt JSON in memory file %s — returning empty briefing", path)
+        return ""
+    except OSError:
         return ""
 
     run_count = data.get("run_count", 0)
@@ -592,7 +595,9 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
                     break
             if changed:
                 atomic_write_json(path, data)
-    except Exception as exc:
+    except MemoryLockTimeout:
+        raise
+    except (json.JSONDecodeError, OSError, ValueError, TypeError) as exc:
         logger.warning("patch_quirk failed scope=%r: %s", scope, exc)
 
 
