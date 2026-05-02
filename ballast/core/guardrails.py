@@ -39,11 +39,13 @@ def build_correction(
 ) -> str:
     """Build the soft correction string injected between nodes on drift.
 
-    Called by run_with_spec when ``assessment.score < spec.drift_threshold``
-    **or** ``assessment.label == "VIOLATED"`` (e.g. Layer-2 or probe verdict
-    after an ambiguous numeric band). Not used for ``VIOLATED_IRREVERSIBLE``.
-    is injected as a UserPromptPart between nodes — it does not stop the
-    agent, only redirects it toward spec alignment.
+    Called by ``run_with_spec`` when ``assessment.score < spec.drift_threshold``
+    or ``assessment.label == "VIOLATED"`` (e.g. a Layer-2 or probe verdict that
+    upgrades an ambiguous numeric score).  Not called for ``VIOLATED_IRREVERSIBLE``
+    — those nodes raise ``HardInterrupt`` instead of injecting a correction.
+
+    The returned string is injected as a ``UserPromptPart`` between nodes; it
+    redirects the agent toward spec alignment without stopping the run.
 
     Args:
         assessment:  NodeAssessment from score_drift() for this node.
