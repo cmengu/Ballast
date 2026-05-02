@@ -44,12 +44,29 @@ class SpecPoller:
     """
 
     def __init__(self, base_url: str, job_id: str) -> None:
+        """Initialise the poller.
+
+        Args:
+            base_url: URL of the Ballast spec server, e.g. "http://localhost:8765".
+                **Security**: ``base_url`` is treated as a trusted server address.
+                Never pass a user-supplied or externally-sourced URL here — doing so
+                can turn the poller into an SSRF client that reaches internal network
+                hosts.  Validate / allowlist the URL in any code path that derives it
+                from external input before constructing a ``SpecPoller``.
+            job_id: Unique identifier for this run.  Must match
+                ``^[A-Za-z0-9_-]{1,128}$``.
+        """
         if not _JOB_ID_RE.match(job_id):
             raise ValueError(
                 f"Invalid job_id {job_id!r}: must match ^[A-Za-z0-9_-]{{1,128}}$. "
                 "Characters like '/', '?', '#' can corrupt URL routing."
             )
-        self.url = f"{base_url.rstrip('/')}/spec/{job_id}/current"
+        parsed = base_url.rstrip("/")
+        if not parsed.startswith(("http://", "https://")):
+            raise ValueError(
+                f"base_url must start with http:// or https://; got {base_url!r}"
+            )
+        self.url = f"{parsed}/spec/{job_id}/current"
         self._current: SpecModel | None = None
         self._client = httpx.Client(timeout=2.0)
 
