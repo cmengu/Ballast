@@ -59,7 +59,7 @@ spec_v2 = lock(SpecModel(
     ],
     constraints=["do not mention OpenAI or Anthropic in any output"],
     allowed_tools=["research_companies"],
-    parent_hash=spec_v1.version,
+    parent_hash=spec_v1.version_hash,
 ))
 
 
@@ -123,9 +123,11 @@ async def main() -> None:
     # ── Poller ────────────────────────────────────────────────────────────
     poller = SpecPoller(SERVER, JOB_ID)
     poller.set_initial(spec_v1)
+    # Note: poller._client is closed by __del__; for production use
+    # `with SpecPoller(...) as poller:` or call poller.close() explicitly.
 
-    print(f"\n🚀 Agent starting — spec v1: {spec_v1.version}")
-    print(f"   Spec update fires in 5s → spec v2: {spec_v2.version}")
+    print(f"\n🚀 Agent starting — spec v1: {spec_v1.version_hash}")
+    print(f"   Spec update fires in 5s → spec v2: {spec_v2.version_hash}")
     print(f"   New constraint: \"{spec_v2.constraints[0]}\"\n")
 
     # ── Run agent + delayed spec push concurrently ────────────────────────
