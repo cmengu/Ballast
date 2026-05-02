@@ -420,6 +420,9 @@ def score_drift(
         # Empty nodes (e.g. pydantic-ai bookkeeping events) have no signal to score.
         # score=1.0 avoids dragging drift thresholds; label STALLED means
         # "no scoreable signal" (bookkeeping / empty), not "progress halted".
+        # NOTE: TrajectoryChecker.check returns None for the same condition
+        # because its Optional[DriftResult] contract allows it.  score_drift
+        # always returns a NodeAssessment so it emits a neutral STALLED instead.
         return NodeAssessment(
             score=1.0, label="STALLED",
             rationale="no scoreable content",
@@ -575,7 +578,11 @@ class TrajectoryChecker:
 
         Returns DriftResult if scored and aggregate >= threshold.
         Returns None if node is not scoreable (type not in _SCOREABLE_NAME_FRAGMENTS
-        and has no scoreable attributes), or has no extractable content.
+        and has no scoreable attributes), or has no extractable content or tool.
+
+        Empty-node contract: for a scoreable-typed node with no content and no
+        tool, returns None (no drift signal).  score_drift() returns STALLED/1.0
+        for the same condition because its return type is always NodeAssessment.
 
         Raises DriftDetected when aggregate score < spec.drift_threshold.
         DriftDetected is NEVER caught here — always propagates to the caller.
