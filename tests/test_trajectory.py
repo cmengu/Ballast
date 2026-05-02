@@ -620,6 +620,28 @@ def _rws_make_agent(nodes, output="done"):
     return agent, run
 
 
+class _RwsAgentRunCancelledAfterFirst(_RwsAgentRun):
+    """Yields the first node, then raises CancelledError on the next await."""
+
+    async def _gen(self):
+        for i, node in enumerate(self._nodes):
+            yield node
+            if i == 0:
+                raise asyncio.CancelledError()
+
+
+def _rws_make_agent_cancel_after_first(nodes, output="done"):
+    run = _RwsAgentRunCancelledAfterFirst(nodes, output)
+    agent = MagicMock()
+
+    @asynccontextmanager
+    async def _iter(task):
+        yield run
+
+    agent.iter = _iter
+    return agent, run
+
+
 def _rws_make_poller(return_values):
     poller = MagicMock()
     poller.poll.side_effect = return_values
@@ -653,6 +675,21 @@ def test_run_with_spec_writes_checkpoint(tmp_path, monkeypatch):
     progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
     assert progress is not None
     assert progress.is_complete is True
+    assert len(progress.completed_node_summaries) == 1
+
+
+def test_run_with_spec_writes_checkpoint_on_cancelled_error(tmp_path, monkeypatch):
+    """CancelledError must still flush checkpoint (BaseException path)."""
+    monkeypatch.chdir(tmp_path)
+    spec = _make_spec()
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent_cancel_after_first(nodes)
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(run_with_spec(agent, "task", spec))
+    progress = BallastProgress.read(str(tmp_path / "ballast-progress.json"))
+    assert progress is not None
+    assert progress.is_complete is False
     assert len(progress.completed_node_summaries) == 1
 
 
