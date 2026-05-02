@@ -5,6 +5,7 @@ score_tool_compliance is tested directly (pure Python, no LLM).
 Integration test requires ANTHROPIC_API_KEY. Skip with: pytest -m 'not integration'
 """
 import os
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -24,15 +25,17 @@ from ballast.core.trajectory import (
 # ---------------------------------------------------------------------------
 
 def _make_spec(
-    allowed_tools: list = None,
-    constraints: list = None,
+    allowed_tools: Optional[list] = None,
+    constraints: Optional[list] = None,
     drift_threshold: float = 0.7,
 ) -> SpecModel:
+    at = [] if allowed_tools is None else allowed_tools
+    cons = [] if constraints is None else constraints
     return lock(SpecModel(
         intent="count words in a string",
         success_criteria=["returns an integer", "integer is accurate"],
-        constraints=constraints or [],
-        allowed_tools=allowed_tools or [],
+        constraints=cons,
+        allowed_tools=at,
         drift_threshold=drift_threshold,
     ))
 
@@ -107,6 +110,35 @@ def test_tool_compliance_tool_not_in_list():
 def test_tool_compliance_non_tool_node_always_passes():
     spec = _make_spec(allowed_tools=["get_word_count"])
     assert score_tool_compliance(FakeTextNode("some output"), spec) == 1.0
+
+
+class ToolCallPart:
+    """Name matches node_tools.extract_node_info part-type detection."""
+
+    def __init__(self, tool_name: str, args: Optional[dict] = None):
+        self.tool_name = tool_name
+        self.args = args or {}
+
+
+class FakeMultiToolPartsNode:
+    """Node with multiple tool parts in one step."""
+
+
+def test_tool_compliance_multi_tool_fail_closed_if_any_forbidden():
+    spec = _make_spec(allowed_tools=["get_word_count"])
+    node = FakeMultiToolPartsNode()
+    node.parts = [
+        ToolCallPart("get_word_count"),
+        ToolCallPart("forbidden"),
+    ]
+    assert score_tool_compliance(node, spec) == 0.0
+
+
+def test_tool_compliance_multi_tool_all_allowed():
+    spec = _make_spec(allowed_tools=["a", "b"])
+    node = FakeMultiToolPartsNode()
+    node.parts = [ToolCallPart("a"), ToolCallPart("b")]
+    assert score_tool_compliance(node, spec) == 1.0
 
 
 # ---------------------------------------------------------------------------
