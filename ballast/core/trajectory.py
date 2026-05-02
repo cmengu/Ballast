@@ -122,14 +122,17 @@ def _get_judge_client() -> "anthropic.Anthropic":
 # ---------------------------------------------------------------------------
 
 def score_tool_compliance(node: Any, spec: SpecModel) -> float:
-    """Rule-based: is the tool used in spec.allowed_tools?
+    """Rule-based: are all tools used in this node within spec.allowed_tools?
+
+    Applies worst-case (fail-closed) logic for multi-tool nodes: if ANY tool
+    in the node violates allowed_tools, the whole node scores 0.0.
 
     Returns:
         1.0 — no tool call in this node, or allowed_tools=[] (all permitted)
-        1.0 — tool_name is in allowed_tools
-        0.0 — tool_name is NOT in allowed_tools (hard spec violation)
+        1.0 — all tool names are in allowed_tools
+        0.0 — any tool name is NOT in allowed_tools (hard spec violation)
 
-    Never raises. Never calls LLM. O(1) string membership check.
+    Never raises. Never calls LLM.
     """
     _, _, tool_info = _extract_node_info(node)
     tool_name = tool_info.get("tool_name", "")
@@ -137,7 +140,12 @@ def score_tool_compliance(node: Any, spec: SpecModel) -> float:
         return 1.0  # Not a tool call — compliance does not apply
     if not spec.allowed_tools:
         return 1.0  # Empty = all tools allowed
-    return 1.0 if tool_name in spec.allowed_tools else 0.0
+    # Worst-case across all tools in the node (multi_tool support)
+    all_tools = tool_info.get("all_tools", [{"tool_name": tool_name}])
+    for t in all_tools:
+        if t["tool_name"] not in spec.allowed_tools:
+            return 0.0
+    return 1.0
 
 
 # ---------------------------------------------------------------------------

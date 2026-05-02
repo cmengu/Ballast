@@ -31,23 +31,28 @@ def extract_node_info(node: Any) -> tuple[str, str, dict]:
     Mirrors the full duck-typed paths used for Layer-1 scoring (nested request/response,
     parts/messages). tool_info is {'tool_name': str, 'tool_args': dict} or {}.
 
-    Tool extraction policy — first match wins:
-        1. Direct node.tool_name + node.args attributes
-        2. First ToolCallPart/ToolCall/FunctionCall found in node.parts or node.messages
-        3. Same search inside node.request and node.response wrappers
-    Only the first tool call found is returned. Nodes with multiple tool parts
-    are uncommon in pydantic-ai; the first-wins policy is documented deliberately.
+    Tool extraction policy — worst-case (fail-closed) for multi-tool nodes:
+        1. Collect all ToolCallPart/ToolCall/FunctionCall parts from every container.
+        2. If exactly one tool is found, return it.
+        3. If multiple distinct tool names are found, return the first one found but
+           flag the result with 'multi_tool': True so callers (allowed_tools checks,
+           compliance scorers) can apply worst-case logic.
+        4. Direct node.tool_name + node.args attributes are always included.
+
+    Callers that care about multi-tool compliance should check tool_info.get('all_tools').
     """
     node_type = type(node).__name__
     content = ""
-    tool_info: dict = {}
+    all_tools: list[dict] = []
 
     if hasattr(node, "tool_name") and hasattr(node, "args"):
         args_raw = getattr(node, "args", {})
-        tool_info = {
-            "tool_name": str(node.tool_name),
-            "tool_args": normalize_tool_args(args_raw),
-        }
+        t_name = str(node.tool_name)
+        if t_name:
+            all_tools.append({
+                "tool_name": t_name,
+                "tool_args": normalize_tool_args(args_raw),
+            })
 
     for container_attr in ("parts", "messages"):
         container = getattr(node, container_attr, None) or []
@@ -60,11 +65,11 @@ def extract_node_info(node: Any) -> tuple[str, str, dict]:
                     getattr(part, "tool_name", getattr(part, "function_name", ""))
                 )
                 t_args = getattr(part, "args", getattr(part, "arguments", {}))
-                if t_name and not tool_info:
-                    tool_info = {
+                if t_name:
+                    all_tools.append({
                         "tool_name": t_name,
                         "tool_args": normalize_tool_args(t_args),
-                    }
+                    })
 
     for wrapper_attr in ("request", "response"):
         wrapper = getattr(node, wrapper_attr, None)
@@ -81,11 +86,25 @@ def extract_node_info(node: Any) -> tuple[str, str, dict]:
                         getattr(part, "tool_name", getattr(part, "function_name", ""))
                     )
                     t_args = getattr(part, "args", getattr(part, "arguments", {}))
-                    if t_name and not tool_info:
-                        tool_info = {
+                    if t_name:
+                        all_tools.append({
                             "tool_name": t_name,
                             "tool_args": normalize_tool_args(t_args),
-                        }
+                        })
+
+    # Deduplicate by tool_name while preserving order, then build tool_info.
+    seen: dict[str, dict] = {}
+    for t in all_tools:
+        if t["tool_name"] not in seen:
+            seen[t["tool_name"]] = t
+    unique_tools = list(seen.values())
+
+    tool_info: dict = {}
+    if unique_tools:
+        tool_info = dict(unique_tools[0])  # first tool as primary
+        tool_info["all_tools"] = unique_tools
+        if len(unique_tools) > 1:
+            tool_info["multi_tool"] = True
 
     for attr in ("text", "content", "output"):
         val = getattr(node, attr, None)
