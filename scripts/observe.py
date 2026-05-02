@@ -23,27 +23,16 @@ OBSERVATION_GOAL = "Count the words in this sentence: the quick brown fox"
 
 
 async def main() -> None:
-    from ballast.core.spec import lock_spec, RunPhaseTracker
-
-    print("[observe.py] Locking spec (non-interactive infer path)...")
-    spec, questions = lock_spec(OBSERVATION_GOAL, domain="coding", interactive=False)
-    print(f"[observe.py] Locked spec:")
-    print(f"  success_criteria: {spec.success_criteria}")
-    print(f"  scope:            {spec.scope}")
-    print(f"  intent signal:    {spec.intent_signal.action_type} / {spec.intent_signal.latent_goal}")
-    print(f"  threshold used:   {spec.threshold_used}")
-    if spec.inferred_assumptions:
-        print(f"  assumptions:      {spec.inferred_assumptions}")
-
     adapter = AGUIAdapter(model="claude-haiku-4-5-20251001")
-    tracker = RunPhaseTracker(spec)
     events = []
-    async for event in adapter.stream(OBSERVATION_GOAL, spec=spec.model_dump()):
-        tracker.update(event)
+    event_types: list[str] = []
+
+    async for event in adapter.stream(OBSERVATION_GOAL, spec={}):
         events.append(event)
+        event_types.append(event.get("event", "unknown"))
 
     print(f"\n[observe.py] Total events: {len(events)}")
-    print(f"[observe.py] Final intent: {tracker.intent_summary()}")
+    print(f"[observe.py] Event sequence: {event_types}")
     print("[observe.py] Done.")
 
 
