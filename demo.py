@@ -123,23 +123,24 @@ async def main() -> None:
     # ── Poller ────────────────────────────────────────────────────────────
     poller = SpecPoller(SERVER, JOB_ID)
     poller.set_initial(spec_v1)
-    # Note: poller._client is closed by __del__; for production use
-    # `with SpecPoller(...) as poller:` or call poller.close() explicitly.
 
     print(f"\n🚀 Agent starting — spec v1: {spec_v1.version_hash}")
     print(f"   Spec update fires in 5s → spec v2: {spec_v2.version_hash}")
     print(f"   New constraint: \"{spec_v2.constraints[0]}\"\n")
 
     # ── Run agent + delayed spec push concurrently ────────────────────────
-    results = await asyncio.gather(
-        run_with_live_spec(
-            agent,
-            "Research and write a structured report on major AI companies across all sectors.",
-            spec_v1,
-            poller,
-        ),
-        push_spec_update(),
-    )
+    try:
+        results = await asyncio.gather(
+            run_with_live_spec(
+                agent,
+                "Research and write a structured report on major AI companies across all sectors.",
+                spec_v1,
+                poller,
+            ),
+            push_spec_update(),
+        )
+    finally:
+        poller.close()
     output, audit_log = results[0]
 
     # ── Audit log ─────────────────────────────────────────────────────────
