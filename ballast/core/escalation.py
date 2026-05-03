@@ -207,9 +207,10 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
         return parsed
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "escalation_level_failed agent=%s exc=%s — treating as escalate",
+            "escalation_level_failed agent=%s exc_type=%s — treating as escalate",
             agent.__class__.__name__,
-            exc,
+            type(exc).__name__,
+            exc_info=True,
         )
         return {"escalate": True}
 
