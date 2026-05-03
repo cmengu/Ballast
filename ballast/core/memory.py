@@ -415,8 +415,11 @@ def extract_quirks(events: list[dict], scope: str) -> list[str]:
         )
         return [q for q in out.quirks if isinstance(q, str)]
     except Exception as exc:
-        import logging as _log
-        _log.getLogger(__name__).warning("extract_quirks failed: %s", exc)
+        logger.warning(
+            "extract_quirks failed exc_type=%s",
+            type(exc).__name__,
+            exc_info=True,
+        )
         return []
 
 

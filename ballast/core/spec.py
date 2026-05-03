@@ -501,7 +501,11 @@ def score_specificity(spec: SpecModel) -> float:
                 return max(0.0, min(1.0, float(block.input.get("score", 0.5))))
         logger.warning("score_specificity: no tool_use block in response — returning 0.0 (fail-closed)")
     except Exception as exc:
-        logger.warning("score_specificity failed — returning 0.0 (fail-closed): %s", exc)
+        logger.warning(
+            "score_specificity failed exc_type=%s — returning 0.0 (fail-closed)",
+            type(exc).__name__,
+            exc_info=True,
+        )
     return 0.0
 
 
