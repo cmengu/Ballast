@@ -124,7 +124,9 @@ async def run_with_live_spec(
                         await coro
                 except Exception as _cb_exc:  # noqa: BLE001
                     logger.warning(
-                        "on_node callback raised at node=%d: %s", node_index, _cb_exc
+                        "on_node callback raised at node=%d exc_type=%s",
+                        node_index, type(_cb_exc).__name__,
+                        exc_info=True,
                     )
 
             node_index += 1

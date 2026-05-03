@@ -121,9 +121,10 @@ class SpecPoller:
         except Exception as exc:
             # data-shape or validation error — the server returned something unexpected
             logger.warning(
-                "spec_poll_invalid_body url=%s version_hash=%s exc=%s",
+                "spec_poll_invalid_body url=%s version_hash=%s exc_type=%s",
                 self.url,
                 (data or {}).get("version_hash", "?"),
-                exc,
+                type(exc).__name__,
+                exc_info=True,
             )
             return None
