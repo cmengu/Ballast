@@ -253,7 +253,8 @@ def recall(scope: str) -> str:
     except json.JSONDecodeError:
         logger.warning("recall: corrupt JSON in memory file %s — returning empty briefing", path)
         return ""
-    except OSError:
+    except OSError as exc:
+        logger.warning("recall: could not read memory file %s: %s — returning empty briefing", path, exc)
         return ""
 
     run_count = data.get("run_count", 0)
