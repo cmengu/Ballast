@@ -407,13 +407,17 @@ def score_drift(
     tool_name = tool_info.get("tool_name", "")
 
     # ── Heuristic gate ────────────────────────────────────────────────────
-    if tool_name and spec.irreversible_actions and tool_name in spec.irreversible_actions:
-        return NodeAssessment(
-            score=0.0, label="VIOLATED_IRREVERSIBLE",
-            rationale=f"irreversible tool: {tool_name}",
-            tool_score=0.0, constraint_score=1.0, intent_score=1.0,
-            tool_name=tool_name,
-        )
+    # Worst-case across ALL tools in the node — mirrors score_tool_compliance.
+    all_tools = tool_info.get("all_tools", [{"tool_name": tool_name}] if tool_name else [])
+    for _t in all_tools:
+        _tname = _t.get("tool_name", "")
+        if _tname and spec.irreversible_actions and _tname in spec.irreversible_actions:
+            return NodeAssessment(
+                score=0.0, label="VIOLATED_IRREVERSIBLE",
+                rationale=f"irreversible tool: {_tname}",
+                tool_score=0.0, constraint_score=1.0, intent_score=1.0,
+                tool_name=_tname,
+            )
 
     tool_score = score_tool_compliance(node, spec)
     if tool_score == 0.0:
@@ -609,10 +613,17 @@ class TrajectoryChecker:
         self._step += 1
 
         # ── Irreversible-action heuristic gate ───────────────────────────
-        # Mirrors score_drift() so the two APIs produce consistent labels for
-        # the same (node, spec) pair.
+        # Worst-case across ALL tools in the node — mirrors score_drift().
         tool_name = tool_info.get("tool_name", "")
-        if tool_name and self.spec.irreversible_actions and tool_name in self.spec.irreversible_actions:
+        _all_tools = tool_info.get("all_tools", [{"tool_name": tool_name}] if tool_name else [])
+        _irreversible_name = next(
+            (_t["tool_name"] for _t in _all_tools
+             if _t.get("tool_name") and self.spec.irreversible_actions
+             and _t["tool_name"] in self.spec.irreversible_actions),
+            None,
+        )
+        if _irreversible_name:
+            tool_name = _irreversible_name
             result = DriftResult(
                 score=0.0,
                 intent_score=1.0,
