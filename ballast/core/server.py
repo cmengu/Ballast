@@ -75,9 +75,18 @@ def update_spec(
     spec: SpecModel,
     x_ballast_token: Optional[str] = Header(None, alias="X-Ballast-Token"),
 ) -> dict:
-    """Store the new spec for this job. Returns version_hash for confirmation."""
+    """Store the new spec for this job. Returns version_hash for confirmation.
+
+    Rejects draft specs (missing locked_at or version_hash) with HTTP 422 so
+    downstream clients that rely on a locked spec contract are protected.
+    """
     _require_token(x_ballast_token)
     _validate_job_id(job_id)
+    if not spec.locked_at or not spec.version_hash:
+        raise HTTPException(
+            status_code=422,
+            detail="Spec must be locked before publishing. Call lock(spec) first.",
+        )
     if job_id not in _current_spec and len(_current_spec) >= _MAX_JOB_SLOTS:
         # Evict the *least-recently-used* entry (first key in OrderedDict).
         oldest_key, _ = _current_spec.popitem(last=False)
