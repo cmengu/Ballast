@@ -57,7 +57,7 @@ def test_agent_guard_allows_under_cap():
 
 def test_agent_guard_raises_when_spend_plus_estimated_exceeds_cap():
     g = AgentCostGuard("worker", agent_cap_usd=0.10, escalation_pool_usd=0.03)
-    g.record(0.10)
+    g._record(0.10)
     with pytest.raises(AgentCapExceeded):
         g.check(0.001)
 
@@ -70,27 +70,27 @@ def test_agent_guard_check_does_not_mutate_spent():
 
 def test_agent_guard_record_accumulates_correctly():
     g = AgentCostGuard("worker", agent_cap_usd=1.0, escalation_pool_usd=0.1)
-    g.record(0.30)
-    g.record(0.40)
+    g._record(0.30)
+    g._record(0.40)
     assert round(g.spent, 4) == 0.70
 
 
 def test_agent_guard_escalation_pool_is_independent_of_main_cap():
     g = AgentCostGuard("worker", agent_cap_usd=0.10, escalation_pool_usd=0.03)
-    g.record(0.09, is_escalation=False)
+    g._record(0.09, is_escalation=False)
     g.check(0.03, is_escalation=True)  # escalation pool is separate — must not raise
 
 
 def test_agent_guard_escalation_raises_when_pool_exhausted():
     g = AgentCostGuard("worker", agent_cap_usd=0.10, escalation_pool_usd=0.03)
-    g.record(0.03, is_escalation=True)
+    g._record(0.03, is_escalation=True)
     with pytest.raises(EscalationBudgetExceeded):
         g.check(0.001, is_escalation=True)
 
 
 def test_agent_cap_exceeded_carries_agent_id():
     g = AgentCostGuard("broker", agent_cap_usd=0.05, escalation_pool_usd=0.01)
-    g.record(0.05)
+    g._record(0.05)
     with pytest.raises(AgentCapExceeded) as exc_info:
         g.check(0.001)
     assert exc_info.value.agent_id == "broker"
@@ -98,7 +98,7 @@ def test_agent_cap_exceeded_carries_agent_id():
 
 def test_escalation_budget_exceeded_carries_agent_id():
     g = AgentCostGuard("ceo", agent_cap_usd=0.10, escalation_pool_usd=0.02)
-    g.record(0.02, is_escalation=True)
+    g._record(0.02, is_escalation=True)
     with pytest.raises(EscalationBudgetExceeded) as exc_info:
         g.check(0.001, is_escalation=True)
     assert exc_info.value.agent_id == "ceo"
@@ -107,7 +107,7 @@ def test_escalation_budget_exceeded_carries_agent_id():
 def test_agent_guard_check_and_record_raises_before_committing():
     """If check_and_record raises, _spent must be unchanged."""
     g = AgentCostGuard("worker", agent_cap_usd=0.10, escalation_pool_usd=0.03)
-    g.record(0.10)  # fill cap
+    g._record(0.10)  # fill cap
     with pytest.raises(AgentCapExceeded):
         g.check_and_record(0.001)
     assert g.spent == pytest.approx(0.10)  # record was never called
@@ -147,7 +147,7 @@ def test_agent_guard_seed_spent_restores_cap():
 
 def test_agent_guard_seed_spent_raises_if_nonempty():
     g = AgentCostGuard("w", agent_cap_usd=10.0, escalation_pool_usd=0.03)
-    g.record(0.01)
+    g._record(0.01)
     with pytest.raises(ValueError, match="cannot seed"):
         g.seed_spent(0.05, 0.0)
 

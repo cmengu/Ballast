@@ -5,7 +5,7 @@ Public interface:
     AgentCapExceeded          — raised when an agent's per-agent cap is breached
     EscalationBudgetExceeded  — raised when escalation pool is exhausted
     HardCapExceeded           — raised when global run hard cap would be exceeded
-    AgentCostGuard       — per-agent cap; prefer check_and_record(); avoid record() alone
+    AgentCostGuard       — per-agent cap; use check_and_record() (atomic); _record() is internal
     RunCostGuard         — global enforcer; owns all AgentCostGuards for a run
 
 Usage:
@@ -135,11 +135,11 @@ class AgentCostGuard:
                     estimated,
                 )
 
-    def record(self, actual: float, is_escalation: bool = False) -> None:
-        """Commit actual spend. Only call after check() has passed.
+    def _record(self, actual: float, is_escalation: bool = False) -> None:
+        """Commit actual spend. Internal — only call after check() has passed.
 
         Validates the amount — guards against NaN/inf/negative values that
-        could corrupt totals if record() is ever called without a prior check().
+        could corrupt totals if _record() is ever called without a prior check().
         """
         actual = self._validate_amount(actual, "actual")
         if is_escalation:
@@ -150,11 +150,11 @@ class AgentCostGuard:
     def check_and_record(self, actual: float, is_escalation: bool = False) -> None:
         """Raise if actual would exceed this agent's cap, then commit atomically.
 
-        Preferred over separate check() + record() calls. If check() raises,
-        record() is never called — state is never partially mutated.
+        Preferred over separate check() + _record() calls. If check() raises,
+        _record() is never called — state is never partially mutated.
         """
         self.check(actual, is_escalation)
-        self.record(actual, is_escalation)
+        self._record(actual, is_escalation)
 
     def seed_spent(self, spent: float, escalation_spent: float = 0.0) -> None:
         """Restore totals from a checkpoint. Call before any check_and_record.
@@ -244,7 +244,7 @@ class RunCostGuard:
         committing. Calling _record() alone bypasses the hard-cap enforcement.
         """
         self._total += actual
-        self._agents[agent_id].record(actual, is_escalation)
+        self._agents[agent_id]._record(actual, is_escalation)
 
     def check_and_record(
         self, agent_id: str, actual: float, is_escalation: bool = False
