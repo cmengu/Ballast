@@ -583,25 +583,28 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
     path = _scope_path(scope)
     if not path.exists():
         return
+    lock = _scope_lock(path)
+    if not _acquire_with_retry(lock, f"patch_quirk(scope={scope!r})"):
+        logger.warning("patch_quirk: lock timeout for scope=%r — skipping confidence update", scope)
+        return
     try:
-        with _scope_lock(path):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                return
-            changed = False
-            for q in data.get("quirks", []):
-                if isinstance(q, dict) and q.get("text") == quirk_text:
-                    current = float(q.get("confidence", 1.0))
-                    q["confidence"] = round(max(0.1, min(10.0, current + delta)), 4)
-                    changed = True
-                    break
-            if changed:
-                atomic_write_json(path, data)
-    except MemoryLockTimeout:
-        raise
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        changed = False
+        for q in data.get("quirks", []):
+            if isinstance(q, dict) and q.get("text") == quirk_text:
+                current = float(q.get("confidence", 1.0))
+                q["confidence"] = round(max(0.1, min(10.0, current + delta)), 4)
+                changed = True
+                break
+        if changed:
+            atomic_write_json(path, data)
     except (json.JSONDecodeError, OSError, ValueError, TypeError) as exc:
         logger.warning("patch_quirk failed scope=%r: %s", scope, exc)
+    finally:
+        lock.release()
 
 
 def memory_report(scope: str) -> str:
