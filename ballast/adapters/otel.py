@@ -49,6 +49,11 @@ _DRIFT_EVENT_SPAN = "drift_event"
 # Labels that map to StatusCode.ERROR — hard violations the operator must see.
 _ERROR_LABELS = frozenset({"VIOLATED", "VIOLATED_IRREVERSIBLE"})
 
+# Rationale is truncated before being written to span attributes / status.
+# Telemetry backends may have weaker access controls than application logs;
+# keeping rationale short limits accidental prompt/content disclosure.
+_RATIONALE_MAX_CHARS = 120
+
 
 # ---------------------------------------------------------------------------
 # DriftSpanPacket — DTO for span attribute preparation
@@ -116,10 +121,16 @@ def emit_drift_span(
         node_cost:   Cost in USD for this node, from NodeSummary.cost_usd.
     """
     try:
+        raw_rationale = assessment.rationale or ""
+        rationale = (
+            raw_rationale[:_RATIONALE_MAX_CHARS] + "…"
+            if len(raw_rationale) > _RATIONALE_MAX_CHARS
+            else raw_rationale
+        )
         packet = DriftSpanPacket(
             label=assessment.label,
             score=assessment.score,
-            rationale=assessment.rationale,
+            rationale=rationale,
             tool_name=assessment.tool_name,
             spec_version=spec.version_hash,
             node_index=node_index,
