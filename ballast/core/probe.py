@@ -29,7 +29,7 @@ from pydantic_ai import Agent
 
 from ballast.core.agent_output import agent_run_result_payload
 from ballast.core.constants import HAIKU_MODEL
-from ballast.core.node_tools import duck_tool_info
+from ballast.core.node_tools import duck_tool_info, extract_node_info
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
@@ -204,11 +204,25 @@ async def verify_node_claim(
         (False, "probe_error: <exc>")  — probe agent failed; fail-closed.
         (False, "<note>")              — constraint violation detected.
     """
-    tool_name, tool_args, content = _get_tool_info(node)
+    _, content, tool_info = extract_node_info(node)
+    tool_name = tool_info.get("tool_name", "")
 
     if not tool_name:
         return True, "no tool call"
 
+    # Fail-closed for multi-tool nodes: the probe can only inspect one tool at a
+    # time, so if the node batched multiple distinct tools, decline to verify and
+    # return (False, ...) so the caller marks the node as VIOLATED rather than
+    # silently passing a partially-checked multi-tool step.
+    if tool_info.get("multi_tool"):
+        logger.warning(
+            "probe_multi_tool_fail_closed tool=%r (multi_tool=%r) — failing closed",
+            tool_name,
+            [t["tool_name"] for t in tool_info.get("all_tools", [])],
+        )
+        return False, "probe_multi_tool: cannot verify all tools in batched step"
+
+    tool_args = tool_info.get("tool_args", {})
     packet = ProbePacket(
         tool_name=tool_name,
         tool_args=json.dumps(tool_args, default=str)[:400],
