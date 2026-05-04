@@ -16,6 +16,13 @@ from pathlib import Path
 # Make ballast importable when run directly from repo root
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Load .env so ANTHROPIC_API_KEY is available for local runs
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv optional; set ANTHROPIC_API_KEY directly if not installed
+
 from ballast.adapters.agui import AGUIAdapter
 
 
