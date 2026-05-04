@@ -116,7 +116,11 @@ class SpecPoller:
             self._current = new_spec   # update baseline so next poll compares correctly
             return new_spec
         except (httpx.HTTPError, httpx.TimeoutException) as exc:
-            logger.debug("spec_poll_unreachable url=%s exc=%s", self.url, exc)
+            logger.debug(
+                "spec_poll_unreachable url=%s exc_type=%s",
+                self.url, type(exc).__name__,
+                exc_info=True,
+            )
             return None  # M5 unreachable — agent continues with current spec
         except Exception as exc:
             # data-shape or validation error — the server returned something unexpected
