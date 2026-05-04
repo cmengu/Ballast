@@ -643,6 +643,11 @@ class TrajectoryChecker:
         # ── Layer-2 judge for ambiguous zone — mirrors score_drift() ─────
         # Runs synchronously (evaluate_node uses a sync Anthropic client).
         # Uses the tracked full_window so context accumulates across check() calls.
+        # NOTE: compact_history is not tracked by TrajectoryChecker (unlike
+        # run_with_spec which maintains a ring-buffer of evicted nodes).
+        # Layer-2 context here covers only the sliding full_window, so long
+        # runs lose early-node context when the window is full. This is a
+        # known limitation of the stateless checker API.
         if aggregate > 0.25 and aggregate < 0.85 and self.spec.harness.enable_layer2_judge:
             layer2_ctx = _layer2_evaluator_context(None, self._full_window)
             layer2_label, _ = evaluate_node(
