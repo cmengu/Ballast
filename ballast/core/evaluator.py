@@ -122,11 +122,13 @@ def _call_evaluator(
         if packet.spec_constraints
         else "  (none)"
     )
+    context_window = packet.context_summary[-5:]
+    context_start = max(0, len(packet.context_summary) - 5)
     context_block = (
         "\n".join(
-            f"  [{i}] tool={e.get('tool_name', '?')} "
+            f"  [{context_start + i}] tool={e.get('tool_name', '?')} "
             f"label={e.get('label', '?')} score={e.get('score', 0.0):.3f}"
-            for i, e in enumerate(packet.context_summary[-5:])
+            for i, e in enumerate(context_window)
         )
         if packet.context_summary
         else "  (empty)"

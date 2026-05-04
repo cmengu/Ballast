@@ -35,6 +35,12 @@ load_dotenv()
 JOB_ID = "demo-001"
 SERVER = "http://localhost:8765"
 
+# When BALLAST_SPEC_SERVER_TOKEN is set (recommended for non-loopback deployments),
+# include it on every request to the spec server.
+import os as _os
+_BALLAST_TOKEN = _os.environ.get("BALLAST_SPEC_SERVER_TOKEN", "")
+_AUTH_HEADERS = {"X-Ballast-Token": _BALLAST_TOKEN} if _BALLAST_TOKEN else {}
+
 # ── Spec v1: no constraints on company names ──────────────────────────────
 # lock() hashes intent + success_criteria → version = 8a9244a9
 spec_v1 = lock(SpecModel(
@@ -75,6 +81,7 @@ async def push_spec_update() -> None:
         await client.post(
             f"{SERVER}/spec/{JOB_ID}/update",
             json=spec_v2.model_dump(),
+            headers=_AUTH_HEADERS,
             timeout=5.0,
         )
     print(f"\n📝 Spec pushed → {spec_v2.version_hash}")
@@ -87,6 +94,7 @@ async def main() -> None:
         await client.post(
             f"{SERVER}/spec/{JOB_ID}/update",
             json=spec_v1.model_dump(),
+            headers=_AUTH_HEADERS,
             timeout=5.0,
         )
 
