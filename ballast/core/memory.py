@@ -253,8 +253,11 @@ def recall(scope: str) -> str:
     except json.JSONDecodeError:
         logger.warning("recall: corrupt JSON in memory file %s — returning empty briefing", path)
         return ""
-    except OSError as exc:
-        logger.warning("recall: could not read memory file %s: %s — returning empty briefing", path, exc)
+    except OSError:
+        logger.warning(
+            "recall: could not read memory file %s — returning empty briefing", path,
+            exc_info=True,
+        )
         return ""
 
     run_count = data.get("run_count", 0)
@@ -567,7 +570,9 @@ def consolidate(scope: str) -> bool:
             return True
         except Exception as exc:
             logger.warning(
-                "consolidate_failed scope=%r: %s", scope, exc, exc_info=True
+                "consolidate_failed scope=%r exc_type=%s",
+                scope, type(exc).__name__,
+                exc_info=True,
             )
             return False
     finally:
@@ -603,7 +608,11 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
         if changed:
             atomic_write_json(path, data)
     except (json.JSONDecodeError, OSError, ValueError, TypeError) as exc:
-        logger.warning("patch_quirk failed scope=%r: %s", scope, exc)
+        logger.warning(
+            "patch_quirk failed scope=%r exc_type=%s",
+            scope, type(exc).__name__,
+            exc_info=True,
+        )
     finally:
         lock.release()
 
@@ -775,5 +784,7 @@ def update_domain_threshold(
             atomic_write_json(path, data)
     except Exception as exc:
         logger.warning(
-            "update_domain_threshold failed domain=%r: %s", domain, exc
+            "update_domain_threshold failed domain=%r exc_type=%s",
+            domain, type(exc).__name__,
+            exc_info=True,
         )
