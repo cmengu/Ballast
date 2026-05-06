@@ -251,7 +251,11 @@ def recall(scope: str) -> str:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
-        logger.warning("recall: corrupt JSON in memory file %s — returning empty briefing", path)
+        logger.warning(
+            "recall: corrupt JSON in memory file %s — returning empty briefing",
+            path,
+            exc_info=True,
+        )
         return ""
     except OSError:
         logger.warning(
