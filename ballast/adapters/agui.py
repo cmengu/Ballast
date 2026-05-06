@@ -68,7 +68,8 @@ class AGUIAdapter(AgentStream):
         `spec` is accepted but not yet used — reserved for future constraint
         enforcement once the adapter moves beyond the observation phase.
         """
-        logger.debug("[AGUIAdapter] goal=%r", goal)
+        if _AGUI_VERBOSE_DEBUG:
+            logger.debug("[AGUIAdapter] goal=%r", goal)
 
         _MAX_EVENT_SEQ = 2000  # prevent unbounded RAM on long-running traces
         event_sequence: list[str] = []
