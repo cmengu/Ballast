@@ -122,7 +122,11 @@ class BallastProgress:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError, UnicodeError) as exc:
-            logger.warning("checkpoint_read_failed path=%s: %s", path, exc)
+            logger.warning(
+                "checkpoint_read_failed path=%s exc_type=%s",
+                path, type(exc).__name__,
+                exc_info=True,
+            )
             return None
         raw_summaries = data.get("completed_node_summaries", [])
         summaries: list[NodeSummary] = []
@@ -144,9 +148,9 @@ class BallastProgress:
                 summaries.append(NodeSummary(**n))
             except (TypeError, KeyError) as exc:
                 logger.warning(
-                    "checkpoint_bad_node_summary path=%s: %s — rejecting load",
-                    path,
-                    exc,
+                    "checkpoint_bad_node_summary path=%s exc_type=%s — rejecting load",
+                    path, type(exc).__name__,
+                    exc_info=True,
                 )
                 return None
         data["completed_node_summaries"] = summaries
@@ -166,7 +170,11 @@ class BallastProgress:
         try:
             return cls(**filtered)
         except (TypeError, KeyError, ValueError) as exc:
-            logger.warning("checkpoint_deserialize_failed path=%s: %s", path, exc)
+            logger.warning(
+                "checkpoint_deserialize_failed path=%s exc_type=%s",
+                path, type(exc).__name__,
+                exc_info=True,
+            )
             return None
 
     def resume_context(self) -> str:
