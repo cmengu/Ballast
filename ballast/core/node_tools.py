@@ -33,10 +33,11 @@ def extract_node_info(node: Any) -> tuple[str, str, dict]:
 
     Tool extraction policy — worst-case (fail-closed) for multi-tool nodes:
         1. Collect all ToolCallPart/ToolCall/FunctionCall parts from every container.
-        2. If exactly one tool is found, return it.
-        3. If multiple distinct tool names are found, return the first one found but
-           flag the result with 'multi_tool': True so callers (allowed_tools checks,
-           compliance scorers) can apply worst-case logic.
+        2. Every invocation is preserved — same-name calls with different args are
+           NOT deduplicated, so a violating second invocation is never hidden.
+        3. If more than one invocation is found, flag with 'multi_tool': True so
+           callers (allowed_tools checks, compliance scorers, probe) apply
+           worst-case logic.
         4. Direct node.tool_name + node.args attributes are always included.
 
     Callers that care about multi-tool compliance should check tool_info.get('all_tools').
@@ -92,18 +93,13 @@ def extract_node_info(node: Any) -> tuple[str, str, dict]:
                             "tool_args": normalize_tool_args(t_args),
                         })
 
-    # Deduplicate by tool_name while preserving order, then build tool_info.
-    seen: dict[str, dict] = {}
-    for t in all_tools:
-        if t["tool_name"] not in seen:
-            seen[t["tool_name"]] = t
-    unique_tools = list(seen.values())
-
+    # Keep every invocation; do NOT deduplicate by name — two calls to the same
+    # tool with different args are distinct and the later one can be violating.
     tool_info: dict = {}
-    if unique_tools:
-        tool_info = dict(unique_tools[0])  # first tool as primary
-        tool_info["all_tools"] = unique_tools
-        if len(unique_tools) > 1:
+    if all_tools:
+        tool_info = dict(all_tools[0])  # first invocation as primary
+        tool_info["all_tools"] = all_tools
+        if len(all_tools) > 1:
             tool_info["multi_tool"] = True
 
     for attr in ("text", "content", "output"):
