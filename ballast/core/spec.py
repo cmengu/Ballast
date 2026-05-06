@@ -612,7 +612,11 @@ def clarify(spec: SpecModel) -> SpecModel:
     except SpecTooVague:
         raise
     except Exception as exc:
-        logger.warning("clarify failed — returning original spec unchanged: %s", exc)
+        logger.warning(
+            "clarify failed exc_type=%s — returning original spec unchanged",
+            type(exc).__name__,
+            exc_info=True,
+        )
     return spec  # Fail-safe: return original unchanged
 
 
