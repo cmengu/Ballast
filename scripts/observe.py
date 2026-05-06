@@ -30,7 +30,7 @@ OBSERVATION_GOAL = "Count the words in this sentence: the quick brown fox"
 
 
 async def main() -> None:
-    adapter = AGUIAdapter(model="claude-haiku-4-5-20251001")
+    adapter = AGUIAdapter(model="claude-haiku-4-5-20251001", load_env=True)
     events = []
     event_types: list[str] = []
 
