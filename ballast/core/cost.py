@@ -83,7 +83,8 @@ class AgentCostGuard:
     """Tracks and enforces per-agent spend limits.
 
     _spent and _escalation_spent are internal state — excluded from __init__.
-    Always call check() before record() to preserve the invariant.
+    Use check_and_record() as the atomic public API.
+    _record() is internal — only call after check() has passed.
     """
 
     agent_id: str
@@ -296,9 +297,10 @@ class RunCostGuard:
                 )
             except (TypeError, ValueError) as exc:
                 logger.warning(
-                    "seed_agent_spends: skipping corrupt entry for agent_id=%r: %s"
+                    "seed_agent_spends: skipping corrupt entry for agent_id=%r exc_type=%s"
                     " — guard for that agent starts at 0",
-                    aid, exc,
+                    aid, type(exc).__name__,
+                    exc_info=True,
                 )
                 continue
             self._agents[aid].seed_spent(spent, esc)
