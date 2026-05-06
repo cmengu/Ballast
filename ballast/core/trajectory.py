@@ -252,9 +252,16 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
             tool_choice={"type": "tool", "name": "constraint_check"},
             messages=[{"role": "user", "content": prompt}],
         )
+        parsed_tool_use = False
         for block in response.content:
             if block.type == "tool_use":
+                parsed_tool_use = True
                 return 0.0 if _coerce_bool(block.input.get("violation", False)) else 1.0
+        if not parsed_tool_use:
+            logger.warning(
+                "constraint_scorer_no_tool_use node=%s — malformed API response, returning 0.0",
+                type(node).__name__,
+            )
     except Exception as e:
         logger.warning(
             "constraint_scorer_failed node=%s exc_type=%s — returning 0.0 (fail-closed)",
@@ -343,10 +350,17 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
             tool_choice={"type": "tool", "name": "score_intent"},
             messages=[{"role": "user", "content": prompt}],
         )
+        parsed_tool_use = False
         for block in response.content:
             if block.type == "tool_use":
+                parsed_tool_use = True
                 score = float(block.input.get("score", 0.5))
                 return max(0.0, min(1.0, score))
+        if not parsed_tool_use:
+            logger.warning(
+                "intent_scorer_no_tool_use node=%s — malformed API response, returning 0.0",
+                type(node).__name__,
+            )
     except Exception as e:
         logger.warning(
             "intent_scorer_failed node=%s exc_type=%s — returning 0.0 (fail-closed)",
