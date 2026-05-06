@@ -425,7 +425,7 @@ def parse_spec(
         )
     except Exception as exc:
         raise SpecParseError(
-            f"spec.md produced an invalid SpecModel: {exc}"
+            f"spec.md produced an invalid SpecModel ({type(exc).__name__})"
         ) from exc
 
 
