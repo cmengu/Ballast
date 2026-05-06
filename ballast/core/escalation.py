@@ -180,12 +180,14 @@ async def _call_level(agent: Agent, packet: EscalationPacket) -> dict:
             return f"tool={tool!r} content={content[:120]!r}"
 
         ctx_lines = "\n".join(f"  [{i}] {_compact_ctx(m)}" for i, m in enumerate(ctx_slice))
+        # Truncate rationale to avoid leaking full model output to escalation LLMs.
+        rationale_short = packet.assessment.rationale[:120]
         prompt = (
             f"ASSESSMENT\n"
             f"  tool: {packet.assessment.tool_name!r}\n"
             f"  score: {packet.assessment.score:.3f}\n"
             f"  label: {packet.assessment.label}\n"
-            f"  rationale: {packet.assessment.rationale}\n\n"
+            f"  rationale: {rationale_short}\n\n"
             f"SPEC INTENT\n  {packet.spec.intent[:400]}\n\n"
             f"SPEC VERSION\n  {packet.spec.version_hash[:8]}\n\n"
             f"RUN CONTEXT\n  run_id={packet.run_id}  node_index={packet.node_index}\n\n"
