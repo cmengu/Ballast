@@ -32,6 +32,8 @@ if TYPE_CHECKING:
 # build_correction — soft correction string for drift events
 # ---------------------------------------------------------------------------
 
+_CORRECTION_RATIONALE_MAX_CHARS = 120
+
 def build_correction(
     assessment: "NodeAssessment",
     spec: SpecModel,
@@ -55,10 +57,11 @@ def build_correction(
     Returns:
         Multi-line correction string beginning with [BALLAST CORRECTION].
     """
+    rationale_short = (assessment.rationale or "")[:_CORRECTION_RATIONALE_MAX_CHARS]
     lines = [
         f"[BALLAST CORRECTION] Drift detected at node {node_index}.",
         f"Score: {assessment.score:.2f}  Label: {assessment.label}",
-        f"Rationale: {assessment.rationale}",
+        f"Rationale: {rationale_short}",
     ]
     if assessment.tool_name:
         lines.append(f"Tool called: {assessment.tool_name}")

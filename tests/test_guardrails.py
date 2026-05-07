@@ -94,6 +94,14 @@ class TestBuildCorrection:
         result = build_correction(a, spec, node_index=0)
         assert "tool not in allowed list" in result
 
+    def test_long_rationale_truncated_to_120_chars(self):
+        spec = _make_spec()
+        long_r = "x" * 200
+        a = _make_assessment(rationale=long_r)
+        result = build_correction(a, spec, node_index=0)
+        assert "x" * 120 in result
+        assert "x" * 121 not in result
+
     def test_contains_spec_intent(self):
         spec = _make_spec()
         a = _make_assessment()
