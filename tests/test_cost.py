@@ -117,7 +117,7 @@ def test_run_guard_check_and_record_raises_before_committing():
     """If RunCostGuard.check_and_record raises, total_spent must be unchanged."""
     rg = RunCostGuard(hard_cap_usd=1.0)
     rg.register("worker", cap=10.0, escalation_pool=0.0)
-    rg._record("worker", 1.0)  # fill hard cap
+    rg.check_and_record("worker", 1.0)  # fill hard cap
     before = rg.total_spent
     with pytest.raises(HardCapExceeded):
         rg.check_and_record("worker", 0.001)
@@ -133,7 +133,7 @@ def test_run_guard_seed_prior_spend_sets_total():
 def test_run_guard_seed_prior_spend_raises_if_guard_has_spend():
     rg = RunCostGuard(hard_cap_usd=1.0)
     rg.register("worker", cap=2.0, escalation_pool=0.0)
-    rg._record("worker", 0.01)
+    rg.check_and_record("worker", 0.01)
     with pytest.raises(ValueError, match="already has"):
         rg.seed_prior_spend(0.50)
 
@@ -270,7 +270,7 @@ def test_run_guard_raises_hard_cap_before_agent_cap():
     """HardCapExceeded fires even when per-agent cap would allow it."""
     rg = RunCostGuard(hard_cap_usd=1.0)
     rg.register("worker", cap=10.0, escalation_pool=0.0)
-    rg._record("worker", 0.999)
+    rg.check_and_record("worker", 0.999)
     with pytest.raises(HardCapExceeded):
         rg.check("worker", 0.002)
 
@@ -278,7 +278,7 @@ def test_run_guard_raises_hard_cap_before_agent_cap():
 def test_run_guard_hard_cap_exceeded_carries_total_and_estimated():
     rg = RunCostGuard(hard_cap_usd=1.0)
     rg.register("worker", cap=10.0, escalation_pool=0.0)
-    rg._record("worker", 0.999)
+    rg.check_and_record("worker", 0.999)
     with pytest.raises(HardCapExceeded) as exc_info:
         rg.check("worker", 0.002)
     assert exc_info.value.total == pytest.approx(0.999)
@@ -290,7 +290,7 @@ def test_run_guard_custom_hard_cap_respected():
     """RunCostGuard(hard_cap_usd=X) enforces X, not the module-level default."""
     rg = RunCostGuard(hard_cap_usd=0.50)
     rg.register("worker", cap=10.0, escalation_pool=0.0)
-    rg._record("worker", 0.40)
+    rg.check_and_record("worker", 0.40)
     with pytest.raises(HardCapExceeded):
         rg.check("worker", 0.20)   # 0.40 + 0.20 = 0.60 > 0.50
     rg.check("worker", 0.09)       # 0.40 + 0.09 = 0.49 < 0.50 — must not raise
@@ -299,8 +299,8 @@ def test_run_guard_custom_hard_cap_respected():
 def test_run_guard_record_advances_global_total():
     rg = RunCostGuard()
     rg.register("worker", cap=1.0, escalation_pool=0.1)
-    rg._record("worker", 0.05)
-    rg._record("worker", 0.10)
+    rg.check_and_record("worker", 0.05)
+    rg.check_and_record("worker", 0.10)
     assert round(rg.total_spent, 4) == 0.15
 
 
@@ -313,7 +313,7 @@ def test_run_guard_unregistered_agent_raises_key_error():
 def test_run_guard_report_contains_expected_keys():
     rg = RunCostGuard()
     rg.register("worker", cap=0.10, escalation_pool=0.03)
-    rg._record("worker", 0.05)
+    rg.check_and_record("worker", 0.05)
     r = rg.report()
     assert set(r.keys()) == {"total_spent", "hard_cap", "remaining", "agents"}
     assert "worker" in r["agents"]
@@ -324,7 +324,7 @@ def test_run_guard_report_contains_expected_keys():
 def test_run_guard_remaining_decrements_on_record():
     rg = RunCostGuard()
     rg.register("worker", cap=1.0, escalation_pool=0.1)
-    rg._record("worker", 0.25)
+    rg.check_and_record("worker", 0.25)
     assert rg.report()["remaining"] == pytest.approx(HARD_CAP_USD - 0.25)
 
 
@@ -448,7 +448,7 @@ def test_run_with_spec_hard_cap_stops_run(tmp_path, monkeypatch):
     agent, _ = _rws_make_agent(nodes, node_costs=[0.6])
     rg = RunCostGuard(hard_cap_usd=1.0)
     rg.register("worker", cap=500.0, escalation_pool=0.0)
-    rg._record("worker", 0.5)
+    rg.check_and_record("worker", 0.5)
     with patch("ballast.core.trajectory.score_drift", return_value=_MOCK_A_PROGRESSING):
         with pytest.raises(HardCapExceeded):
             asyncio.run(run_with_spec(agent, "task", spec, cost_guard=rg, agent_id="worker"))

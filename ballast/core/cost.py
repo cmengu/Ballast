@@ -193,7 +193,8 @@ class RunCostGuard:
 
     Call register() for every agent_id before passing this guard to run_with_spec.
     check() enforces the global hard_cap_usd first, then the per-agent cap.
-    record() advances both the global total and the per-agent total.
+    check_and_record() is the only way to commit spend — it runs check() then
+    updates both the global total and the per-agent ledger atomically.
     """
 
     def __init__(self, hard_cap_usd: float = HARD_CAP_USD) -> None:
@@ -205,7 +206,7 @@ class RunCostGuard:
     def register(self, agent_id: str, cap: float, escalation_pool: float) -> None:
         """Register an agent with its spend cap and escalation pool.
 
-        Must be called before check() or record() for this agent_id.
+        Must be called before check_and_record() for this agent_id.
         Raises ValueError if agent_id is already registered — double-registration
         would silently reset the cap and lose any previously recorded spend.
         """
@@ -236,17 +237,6 @@ class RunCostGuard:
             raise HardCapExceeded(self._total, estimated, self.hard_cap_usd)
         self._agents[agent_id].check(estimated, is_escalation)
 
-    def _record(
-        self, agent_id: str, actual: float, is_escalation: bool = False
-    ) -> None:
-        """Internal: commit actual spend to global total and per-agent guard.
-
-        DO NOT call directly — use check_and_record() which enforces caps before
-        committing. Calling _record() alone bypasses the hard-cap enforcement.
-        """
-        self._total += actual
-        self._agents[agent_id]._record(actual, is_escalation)
-
     def check_and_record(
         self, agent_id: str, actual: float, is_escalation: bool = False
     ) -> None:
@@ -257,7 +247,8 @@ class RunCostGuard:
         Checks global hard cap first, then per-agent cap, then commits both.
         """
         self.check(agent_id, actual, is_escalation)
-        self._record(agent_id, actual, is_escalation)
+        self._total += actual
+        self._agents[agent_id]._record(actual, is_escalation)
 
     def seed_prior_spend(self, prior_spend: float) -> None:
         """Seed global total from a prior run segment (used by run_with_spec on resume).
