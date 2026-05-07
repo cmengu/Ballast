@@ -19,7 +19,7 @@ Schema:
 Public interface:
     recall, write, extract_quirks, log_run, consolidate,
     atomic_write_json, memory_report, patch_quirk
-    MemoryLockTimeout — raised when write/log_run/consolidate cannot acquire the scope lock
+    MemoryLockTimeout — raised when write / log_run / consolidate / patch_quirk cannot acquire the scope lock
 """
 from __future__ import annotations
 
@@ -588,15 +588,20 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
 
     Positive delta confirms the observation after a successful run.
     Negative delta weakens an observation whose hypothesis wasn't confirmed.
-    Confidence clamped to [0.1, 10.0]. No-op if quirk_text not found. Never raises.
+    Confidence clamped to [0.1, 10.0]. No-op if quirk_text not found.
+
+    Raises:
+        MemoryLockTimeout: if the scope lock cannot be acquired (same as write).
     """
     path = _scope_path(scope)
     if not path.exists():
         return
     lock = _scope_lock(path)
     if not _acquire_with_retry(lock, f"patch_quirk(scope={scope!r})"):
-        logger.warning("patch_quirk: lock timeout for scope=%r — skipping confidence update", scope)
-        return
+        logger.error("patch_quirk: lock timeout for scope=%r", scope)
+        raise MemoryLockTimeout(
+            f"patch_quirk could not acquire lock for scope={scope!r}"
+        )
     try:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
