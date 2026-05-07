@@ -138,6 +138,14 @@ class BallastDashboard(App):
         """
         progress = BallastProgress.read(self._path)
         if progress is None:
+            try:
+                self.query_one("#stats", Static).update(
+                    f"No checkpoint yet — {self._path!r}\n"
+                    "(waiting for ballast-progress.json)"
+                )
+            except Exception:
+                # Headless/unit tests may call _poll before compose/mount completes.
+                pass
             return
         # Skip re-render if nothing changed since last poll.
         if progress.updated_at == self._last_updated_at:
