@@ -141,6 +141,40 @@ def test_tool_compliance_multi_tool_all_allowed():
     assert score_tool_compliance(node, spec) == 1.0
 
 
+def test_tool_compliance_same_name_different_args_both_preserved():
+    """Regression: two calls to the same tool with different args must both be
+    seen — the second call may be forbidden even if the first is allowed."""
+    spec = _make_spec(allowed_tools=["safe_tool"])
+    node = FakeMultiToolPartsNode()
+    # Two invocations of the same tool — still multi-tool because two entries
+    node.parts = [
+        ToolCallPart("safe_tool", {"x": 1}),
+        ToolCallPart("safe_tool", {"x": 2}),
+    ]
+    _, _, ti = _extract_node_info(node)
+    # Both invocations must appear in all_tools (no name-only dedup)
+    assert len(ti["all_tools"]) == 2
+    assert ti.get("multi_tool") is True
+    # Compliance: both calls are to an allowed tool — should pass
+    assert score_tool_compliance(node, spec) == 1.0
+
+
+def test_tool_compliance_same_name_second_call_forbidden():
+    """If a node makes two calls — one allowed, one forbidden (different name)
+    but presented as same-name — worst-case logic must catch the forbidden one."""
+    spec = _make_spec(allowed_tools=["ok"])
+    node = FakeMultiToolPartsNode()
+    # same name OK twice; then a different forbidden tool
+    node.parts = [
+        ToolCallPart("ok", {"step": 1}),
+        ToolCallPart("ok", {"step": 2}),
+        ToolCallPart("bad", {}),
+    ]
+    _, _, ti = _extract_node_info(node)
+    assert len(ti["all_tools"]) == 3
+    assert score_tool_compliance(node, spec) == 0.0
+
+
 # ---------------------------------------------------------------------------
 # TrajectoryChecker — init guards
 # ---------------------------------------------------------------------------
