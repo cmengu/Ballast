@@ -6,7 +6,7 @@ Integration test requires ANTHROPIC_API_KEY. Skip with: pytest -m 'not integrati
 """
 import os
 from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -454,7 +454,7 @@ def test_trajectory_checker_real_llm():
 import asyncio
 from contextlib import asynccontextmanager
 
-from ballast.core.checkpoint import BallastProgress
+from ballast.core.checkpoint import BallastProgress, NodeSummary
 from ballast.core.trajectory import NodeAssessment, _compact_node, run_with_spec, score_drift
 
 # Pre-built NodeAssessment stubs for run_with_spec mocks
@@ -768,3 +768,72 @@ def test_run_with_spec_no_poller_skips_injection(tmp_path, monkeypatch):
     with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
         asyncio.run(run_with_spec(agent, "task", spec))
     assert run.message_history == []
+
+
+def test_run_with_spec_skips_environment_probe_when_harness_disabled(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    from ballast.core.spec import HarnessProfile
+
+    spec = lock(SpecModel(
+        intent="count words in a string",
+        success_criteria=["returns an integer", "integer is accurate"],
+        harness=HarnessProfile(enable_environment_probe=False),
+    ))
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent(nodes)
+    with patch("ballast.core.trajectory.score_drift", return_value=_A_PROGRESSING):
+        with patch(
+            "ballast.core.trajectory.verify_node_claim",
+            new_callable=AsyncMock,
+        ) as mock_probe:
+            asyncio.run(run_with_spec(agent, "task", spec))
+    mock_probe.assert_not_called()
+
+
+def test_run_with_spec_resume_seeds_compact_history_for_layer2(tmp_path, monkeypatch):
+    """Layer-2 / score_drift must see prior rows after resume (metadata only)."""
+    monkeypatch.chdir(tmp_path)
+    from datetime import datetime, timezone
+
+    spec = _make_spec()
+    summaries = [
+        NodeSummary(
+            0, "t1", "PROGRESSING", 0.9, 0.01, True,
+            spec.version_hash, "2026-01-01T00:00:00+00:00",
+        ),
+        NodeSummary(
+            1, "t2", "PROGRESSING", 0.85, 0.01, True,
+            spec.version_hash, "2026-01-01T00:00:01+00:00",
+        ),
+    ]
+    prior = BallastProgress(
+        spec_hash=spec.version_hash,
+        active_spec_hash=spec.version_hash,
+        spec_intent=spec.intent,
+        run_id="prior",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        last_clean_node_index=1,
+        completed_node_summaries=summaries,
+        remaining_success_criteria=list(spec.success_criteria),
+    )
+    prior.write(str(tmp_path / "ballast-progress.json"))
+
+    captured: dict = {}
+
+    def fake_score_drift(node, full_window, active_spec, compact_history=None):
+        captured["compact_history"] = list(compact_history or [])
+        return _A_PROGRESSING
+
+    nodes = [_RwsNode()]
+    agent, _ = _rws_make_agent(nodes)
+    with patch("ballast.core.trajectory.score_drift", side_effect=fake_score_drift):
+        asyncio.run(run_with_spec(agent, "task", spec))
+
+    ch = captured.get("compact_history") or []
+    assert len(ch) == 2
+    assert ch[0]["tool_name"] == "t1"
+    assert ch[1]["tool_name"] == "t2"
+    assert ch[0]["summary"] == ""

@@ -551,6 +551,35 @@ def _compact_node(
     }
 
 
+def _resume_compact_history_from_progress(
+    progress: BallastProgress,
+    context_window_size: int,
+    node_offset: int,
+) -> list[dict]:
+    """Rebuild Layer-2 sliding context from checkpoint summaries after resume.
+
+    ``NodeSummary`` does not store per-node text content — the ``summary`` field
+    in each compact dict is left empty. Tool name, label, score, cost, and
+    ``verified`` are restored so ambiguous-band Layer-2 and escalation see a
+    continuous ledger aligned with ``node_index``.
+    """
+    win = max(1, context_window_size)
+    candidates = [s for s in progress.completed_node_summaries if s.index < node_offset]
+    candidates.sort(key=lambda s: s.index)
+    tail = candidates[-win:]
+    return [
+        {
+            "tool_name": s.tool_name,
+            "label": s.label,
+            "score": round(s.drift_score, 3),
+            "cost_usd": s.cost_usd,
+            "verified": s.verified,
+            "summary": "",  # not persisted at checkpoint
+        }
+        for s in tail
+    ]
+
+
 def _layer2_evaluator_context(compact_history: list | None, full_window: list) -> list[dict]:
     """Build dict summaries for Layer 2: evicted nodes plus raw nodes still in full_window.
 
@@ -810,6 +839,13 @@ async def run_with_spec(
 
     Raises:
         ValueError if spec is not locked.
+
+    Resume:
+        When ``can_resume`` is true, ``compact_history`` for Layer-2 is rebuilt from
+        ``completed_node_summaries`` (last ``context_window_size`` nodes before
+        ``node_offset``). Per-node text content is not stored in the checkpoint —
+        restored rows have empty ``summary`` fields; tool/label/score metadata is
+        preserved.
     """
     if not is_locked(spec):
         raise ValueError(
@@ -821,7 +857,9 @@ async def run_with_spec(
 
     # Resume from checkpoint if available
     progress = BallastProgress.read(checkpoint_path)
-    if can_resume(progress, spec):
+    resumed = can_resume(progress, spec)
+    if resumed:
+        assert progress is not None
         task = f"{progress.resume_context()}\n\nOriginal task: {task}"
         node_offset = progress.last_clean_node_index + 1
         if cost_guard is not None:
@@ -853,6 +891,16 @@ async def run_with_spec(
     # Parallel to full_window: per-node (drift_score, label, cost_usd, verified) at eviction.
     full_window_meta: list[tuple[float, str, float, bool]] = []
     compact_history: list[dict] = []
+    if resumed:
+        compact_history = _resume_compact_history_from_progress(
+            progress, spec.harness.context_window_size, node_offset,
+        )
+        if compact_history:
+            logger.info(
+                "resume: restored %d node rows into Layer-2 context "
+                "(per-node text not in checkpoint)",
+                len(compact_history),
+            )
     node_index = node_offset
     _cost_usd_warned = False
 
@@ -905,7 +953,10 @@ async def run_with_spec(
 
                 # ── 3. Environment probe ────────────────────────────────────
                 verified = True
-                if assessment.label == "PROGRESSING":
+                if (
+                    assessment.label == "PROGRESSING"
+                    and active_spec.harness.enable_environment_probe
+                ):
                     verified, probe_note = await verify_node_claim(
                         node, assessment.label, active_spec,
                     )
