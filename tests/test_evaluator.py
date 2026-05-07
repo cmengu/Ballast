@@ -209,3 +209,27 @@ class TestEvaluateNode:
 
         ev_mod._evaluator_client = None
         assert ev_mod._evaluator_client is None
+
+    def test_evaluate_node_multi_tool_includes_all_tools_in_prompt(self):
+        spec = _make_spec()
+
+        class ToolCallPart:
+            def __init__(self, tool_name: str, args: dict | None = None):
+                self.tool_name = tool_name
+                self.args = args or {}
+
+        class FakeNode:
+            pass
+
+        node = FakeNode()
+        node.parts = [ToolCallPart("alpha"), ToolCallPart("beta")]
+        mock_client = _mock_client("PROGRESSING", "ok")
+        with patch("ballast.core.evaluator._get_evaluator_client", return_value=mock_client):
+            evaluate_node(
+                node, [], spec,
+                tool_score=0.6, constraint_score=0.5, intent_score=0.6,
+            )
+        user_content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
+        assert "alpha" in user_content
+        assert "beta" in user_content
+        assert "ALL invocations" in user_content

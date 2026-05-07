@@ -25,7 +25,7 @@ from typing import Any
 import anthropic
 
 from ballast.core.constants import HAIKU_MODEL
-from ballast.core.node_tools import duck_tool_info
+from ballast.core.node_tools import extract_node_info
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,7 @@ class EvaluatorPacket:
     Constructed once in evaluate_node(); treated as read-only by _call_evaluator().
     tool_args is JSON-serialised str for prompt safety (avoids nested dict formatting).
     context_summary is a list of compact dicts from the Layer 2 context window (may be empty).
+    multi_tool_summary: when non-empty, NODE ACTION uses all invocations (aligns with Layer-1).
     """
 
     content: str
@@ -98,6 +99,7 @@ class EvaluatorPacket:
     constraint_score: float = 1.0
     intent_score: float = 1.0
     aggregate: float = 1.0
+    multi_tool_summary: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +135,19 @@ def _call_evaluator(
         if packet.context_summary
         else "  (empty)"
     )
+    if packet.multi_tool_summary:
+        node_action = (
+            f"{packet.multi_tool_summary}\n"
+            f"  content: {packet.content[:400]}\n"
+        )
+    else:
+        node_action = (
+            f"  tool: {packet.tool_name!r}\n"
+            f"  args: {packet.tool_args[:300]}\n"
+            f"  content: {packet.content[:400]}\n"
+        )
     prompt = (
-        f"NODE ACTION\n"
-        f"  tool: {packet.tool_name!r}\n"
-        f"  args: {packet.tool_args[:300]}\n"
-        f"  content: {packet.content[:400]}\n\n"
+        f"NODE ACTION\n{node_action}\n"
         f"LAYER 1 SCORES\n"
         f"  tool={packet.tool_score:.3f}  constraint={packet.constraint_score:.3f}"
         f"  intent={packet.intent_score:.3f}  aggregate={packet.aggregate:.3f}\n\n"
@@ -207,8 +217,21 @@ def evaluate_node(
         ("VIOLATED", rationale)    — node breaches a constraint, works against goal,
                                      or the evaluator could not reach a verdict (fail-closed).
     """
-    # Shared duck-typed extraction with probe.py (node_tools — no trajectory import).
-    tool_name, tool_args, content = duck_tool_info(node, content_max=600)
+    # Shared extraction with probe.py / Layer-1 scorers (all_tools for multi-invocation nodes).
+    _, content, tool_info = extract_node_info(node)
+    tool_name = tool_info.get("tool_name", "")
+    tool_args = tool_info.get("tool_args", {})
+    tool_args_str = json.dumps(tool_args, default=str)[:300]
+    all_tools = tool_info.get("all_tools", [])
+    multi_tool_summary = ""
+    if len(all_tools) > 1:
+        multi_tool_summary = (
+            "Tools called (multi-tool node — judge ALL invocations):\n"
+            + "\n".join(
+                f"  [{i}] {t.get('tool_name', '')} args={str(t.get('tool_args', {}))[:200]}"
+                for i, t in enumerate(all_tools)
+            )
+        )
 
     # Build context summary from full_window.
     # evaluate_node only consumes dict entries from full_window.
@@ -223,9 +246,9 @@ def evaluate_node(
     aggregate = min(tool_score, constraint_score, intent_score)
 
     packet = EvaluatorPacket(
-        content=content,
+        content=content[:600],
         tool_name=tool_name,
-        tool_args=json.dumps(tool_args, default=str)[:300],
+        tool_args=tool_args_str,
         spec_intent=spec.intent,
         spec_constraints=list(spec.constraints),
         context_summary=context_summary,
@@ -233,6 +256,7 @@ def evaluate_node(
         constraint_score=constraint_score,
         intent_score=intent_score,
         aggregate=aggregate,
+        multi_tool_summary=multi_tool_summary,
     )
 
     return _call_evaluator(_get_evaluator_client(), packet)
