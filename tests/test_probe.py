@@ -217,6 +217,28 @@ class TestVerifyNodeClaim:
         assert verified is False
         assert "probe_error" in note
 
+    @pytest.mark.asyncio
+    async def test_multi_tool_node_fail_closed_without_probe_call(self):
+        """Same step with two tools — probe cannot audit both; no LLM probe call."""
+        spec = _make_spec()
+
+        class ToolCallPart:
+            def __init__(self, tool_name: str, args: dict | None = None):
+                self.tool_name = tool_name
+                self.args = args or {}
+
+        class FakeMultiNode:
+            pass
+
+        node = FakeMultiNode()
+        node.parts = [ToolCallPart("a"), ToolCallPart("b")]
+
+        with patch("ballast.core.probe._get_probe_agent") as mock_getter:
+            verified, note = await verify_node_claim(node, "PROGRESSING", spec)
+        assert verified is False
+        assert "multi_tool" in note
+        mock_getter.assert_not_called()
+
     def test_lazy_singleton_not_constructed_at_import(self):
         """Importing probe.py must not require ANTHROPIC_API_KEY."""
         import ballast.core.probe as probe_mod
