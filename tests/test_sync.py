@@ -166,3 +166,15 @@ def test_server_rejects_invalid_job_id(job_id):
 def test_poller_constructor_rejects_invalid_job_id(job_id):
     with pytest.raises(ValueError, match="Invalid job_id"):
         SpecPoller("http://localhost:8765", job_id)
+
+
+@pytest.mark.parametrize("bad_url", [
+    "localhost:8765",
+    "ftp://localhost:8765",
+    "//localhost:8765",
+    "",
+])
+def test_poller_constructor_rejects_invalid_base_url(bad_url):
+    """SpecPoller must reject base_url that doesn't start with http:// or https://."""
+    with pytest.raises(ValueError, match="http"):
+        SpecPoller(bad_url, "job-001")
