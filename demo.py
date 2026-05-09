@@ -78,12 +78,13 @@ async def push_spec_update() -> None:
     """
     await asyncio.sleep(5)
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SERVER}/spec/{JOB_ID}/update",
             json=spec_v2.model_dump(),
             headers=_AUTH_HEADERS,
             timeout=5.0,
         )
+        r.raise_for_status()
     print(f"\n📝 Spec pushed → {spec_v2.version_hash}")
     print(f"   constraint: {spec_v2.constraints[0]}")
 
@@ -91,12 +92,13 @@ async def push_spec_update() -> None:
 async def main() -> None:
     # ── Prime server with spec v1 ─────────────────────────────────────────
     async with httpx.AsyncClient() as client:
-        await client.post(
+        r = await client.post(
             f"{SERVER}/spec/{JOB_ID}/update",
             json=spec_v1.model_dump(),
             headers=_AUTH_HEADERS,
             timeout=5.0,
         )
+        r.raise_for_status()
 
     # ── Agent with a minimal tool that returns company data ───────────────
     # The tool always returns company names including OpenAI and Anthropic.
