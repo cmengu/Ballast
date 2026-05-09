@@ -29,7 +29,7 @@ from pydantic_ai import Agent
 
 from ballast.core.agent_output import agent_run_result_payload
 from ballast.core.constants import HAIKU_MODEL
-from ballast.core.node_tools import duck_tool_info, extract_node_info
+from ballast.core.node_tools import extract_node_info
 from ballast.core.spec import SpecModel
 
 logger = logging.getLogger(__name__)
@@ -119,12 +119,21 @@ class ProbePacket:
 
 
 # ---------------------------------------------------------------------------
-# _get_tool_info — delegates to node_tools (shared with evaluator)
+# _get_tool_info — single extraction path via extract_node_info
 # ---------------------------------------------------------------------------
 
 def _get_tool_info(node: Any) -> tuple[str, dict, str]:
-    """Extract (tool_name, tool_args, content) from a pydantic-ai node."""
-    return duck_tool_info(node, content_max=500)
+    """Extract (tool_name, tool_args, content) from a pydantic-ai node.
+
+    Delegates to extract_node_info so probe uses the same extraction policy
+    as Layer-1 scorers and evaluator (no duplicate duck-typed paths).
+    """
+    _, content, ti = extract_node_info(node)
+    return (
+        ti.get("tool_name", ""),
+        ti.get("tool_args", {}),
+        content[:500],
+    )
 
 
 # ---------------------------------------------------------------------------
