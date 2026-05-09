@@ -352,7 +352,9 @@ def parse_spec(
     except FileNotFoundError:
         raise SpecParseError(f"spec file not found: {path_str}")
     except OSError as exc:
-        raise SpecParseError(f"cannot read spec file {path_str!r}: {exc}") from exc
+        raise SpecParseError(
+            f"cannot read spec file {path_str!r}: {type(exc).__name__}"
+        ) from exc
 
     def _section(name: str) -> str:
         """Text between ## name and the next ## heading (or EOF). Case-insensitive."""
