@@ -143,7 +143,7 @@ def score_tool_compliance(node: Any, spec: SpecModel) -> float:
     # Worst-case across all tools in the node (multi_tool support)
     all_tools = tool_info.get("all_tools", [{"tool_name": tool_name}])
     for t in all_tools:
-        if t["tool_name"] not in spec.allowed_tools:
+        if t.get("tool_name", "") not in spec.allowed_tools:
             return 0.0
     return 1.0
 
@@ -223,7 +223,7 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
     all_tools = tool_info.get("all_tools", [])
     if len(all_tools) > 1:
         tools_summary = "\n".join(
-            f"  [{i}] {t['tool_name']} args={str(t.get('tool_args', {}))[:200]}"
+            f"  [{i}] {t.get('tool_name', '')} args={str(t.get('tool_args', {}))[:200]}"
             for i, t in enumerate(all_tools)
         )
         check_content = (
@@ -256,7 +256,14 @@ def score_constraint_violation(node: Any, spec: SpecModel) -> float:
         for block in response.content:
             if block.type == "tool_use":
                 parsed_tool_use = True
-                return 0.0 if _coerce_bool(block.input.get("violation", False)) else 1.0
+                if "violation" not in block.input:
+                    logger.warning(
+                        "constraint_scorer_missing_violation node=%s — "
+                        "malformed tool output, returning 0.0 (fail-closed)",
+                        type(node).__name__,
+                    )
+                    return 0.0
+                return 0.0 if _coerce_bool(block.input["violation"]) else 1.0
         if not parsed_tool_use:
             logger.warning(
                 "constraint_scorer_no_tool_use node=%s — malformed API response, returning 0.0",
@@ -322,7 +329,7 @@ def score_intent_alignment(node: Any, spec: SpecModel) -> float:
     all_tools = tool_info.get("all_tools", [])
     if len(all_tools) > 1:
         tools_summary = "\n".join(
-            f"  [{i}] {t['tool_name']} args={str(t.get('tool_args', {}))[:200]}"
+            f"  [{i}] {t.get('tool_name', '')} args={str(t.get('tool_args', {}))[:200]}"
             for i, t in enumerate(all_tools)
         )
         action_section = f"Tools called (multi-tool node — score intent for ALL):\n{tools_summary}"
@@ -1011,6 +1018,16 @@ async def run_with_spec(
                             run_id=run_id,
                             node_index=node_index,
                         )
+                        # Cap injection to prevent context bloat / abuse from
+                        # pathologically long broker/CEO responses.
+                        _MAX_RESOLUTION_CHARS = 800
+                        if len(resolution) > _MAX_RESOLUTION_CHARS:
+                            logger.warning(
+                                "escalation_resolution_truncated original_len=%d "
+                                "run_id=%s node=%d",
+                                len(resolution), run_id, node_index,
+                            )
+                            resolution = resolution[:_MAX_RESOLUTION_CHARS]
                         agent_run.ctx.state.message_history.append(
                             ModelRequest(parts=[UserPromptPart(content=resolution)])
                         )
@@ -1048,7 +1065,18 @@ async def run_with_spec(
                     if assessment.label == "VIOLATED":
                         progress.total_violations += 1
 
-                # ── 5. Context window management ────────────────────────────
+                # ── 5. Cost enforcement (before window / NodeSummary for this node) ──
+                # check_and_record raises before any state mutation if cap exceeded.
+                if cost_guard is not None:
+                    cost_guard.check_and_record(agent_id, node_cost)
+                    snap = cost_guard.report()["agents"].get(agent_id)
+                    if snap:
+                        progress.agent_spend_by_id[agent_id] = {
+                            "spent": float(snap["spent"]),
+                            "escalation_spent": float(snap["escalation_spent"]),
+                        }
+
+                # ── 5b. Context window management ───────────────────────────
                 _win_sz = max(1, active_spec.harness.context_window_size)
                 full_window.append(node)
                 full_window_meta.append(
@@ -1058,16 +1086,6 @@ async def run_with_spec(
                     evicted = full_window.pop(0)
                     ev_s, ev_l, ev_c, ev_v = full_window_meta.pop(0)
                     compact_history.append(_compact_node(evicted, ev_s, ev_l, ev_c, ev_v))
-
-                # ── 5b. Cost enforcement (before persisting this node) ────────
-                if cost_guard is not None:
-                    cost_guard.check_and_record(agent_id, node_cost)
-                    snap = cost_guard.report()["agents"].get(agent_id)
-                    if snap:
-                        progress.agent_spend_by_id[agent_id] = {
-                            "spent": float(snap["spent"]),
-                            "escalation_spent": float(snap["escalation_spent"]),
-                        }
 
                 # ── 6. Checkpoint ───────────────────────────────────────────
                 progress.completed_node_summaries.append(NodeSummary(
