@@ -392,6 +392,10 @@ def extract_quirks(events: list[dict], scope: str) -> list[str]:
 
     Uses head+tail sampling (first 10 + last 10) to capture early and late patterns.
     Returns list[str]. Returns [] on any error — never raises.
+
+    **Privacy:** Raw ``events`` are embedded in the LLM prompt. Do not pass
+    production traces that may contain secrets or PII unless your policy allows it;
+    callers may pre-redact or truncate ``events`` before calling.
     """
     if not events:
         return []
@@ -588,10 +592,14 @@ def patch_quirk(scope: str, quirk_text: str, delta: float) -> None:
 
     Positive delta confirms the observation after a successful run.
     Negative delta weakens an observation whose hypothesis wasn't confirmed.
-    Confidence clamped to [0.1, 10.0]. No-op if quirk_text not found.
+    Confidence clamped to [0.1, 10.0].
+
+    After the scope lock is acquired: no-op if ``quirk_text`` does not match any
+    stored quirk, or if the JSON file is unreadable (returns without writing).
 
     Raises:
-        MemoryLockTimeout: if the scope lock cannot be acquired (same as write).
+        MemoryLockTimeout: if the scope lock cannot be acquired before timing out
+        (distinct from “no matching quirk”, which is a silent no-op).
     """
     path = _scope_path(scope)
     if not path.exists():

@@ -10,6 +10,10 @@ Wires Agent.iter + SpecPoller + SpecDelta injection:
     - Log at DEBUG: "node 00 | spec:a3f2xxxx | NodeTypeName"
     - Call optional on_node(node_index, node, active_spec, delta) callback (sync or async)
 
+Unlike ``run_with_spec``: no ``ballast-progress.json`` checkpoint, no drift/probe/cost
+loop, and no CancelledError/GeneratorExit flush — use the hook for observation or
+lighter integration; use ``run_with_spec`` when you need full audit + resume parity.
+
 Returns:
     (output, audit_log)
     audit_log: list of {node_index, spec_hash, node_type, delta_injected}
