@@ -227,7 +227,7 @@ async def verify_node_claim(
         logger.warning(
             "probe_multi_tool_fail_closed tool=%r (multi_tool=%r) — failing closed",
             tool_name,
-            [t["tool_name"] for t in tool_info.get("all_tools", [])],
+            [t.get("tool_name", "") for t in tool_info.get("all_tools", [])],
         )
         return False, "probe_multi_tool: cannot verify all tools in batched step"
 

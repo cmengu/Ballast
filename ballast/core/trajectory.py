@@ -469,8 +469,10 @@ def score_drift(
         # (which may be an allowed tool when ordering is [allowed, forbidden]).
         all_tools = tool_info.get("all_tools", [{"tool_name": tool_name}] if tool_name else [])
         offending = next(
-            (t["tool_name"] for t in all_tools
-             if spec.allowed_tools and t.get("tool_name") and t["tool_name"] not in spec.allowed_tools),
+            (tn for t in all_tools
+             if spec.allowed_tools
+             and (tn := t.get("tool_name", ""))
+             and tn not in spec.allowed_tools),
             tool_name,  # fallback to primary if no allowed_tools restriction
         )
         return NodeAssessment(
@@ -698,9 +700,10 @@ class TrajectoryChecker:
         tool_name = tool_info.get("tool_name", "")
         _all_tools = tool_info.get("all_tools", [{"tool_name": tool_name}] if tool_name else [])
         _irreversible_name = next(
-            (_t["tool_name"] for _t in _all_tools
-             if _t.get("tool_name") and self.spec.irreversible_actions
-             and _t["tool_name"] in self.spec.irreversible_actions),
+            (tn for _t in _all_tools
+             if (tn := _t.get("tool_name", ""))
+             and self.spec.irreversible_actions
+             and tn in self.spec.irreversible_actions),
             None,
         )
         if _irreversible_name:
