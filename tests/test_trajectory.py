@@ -494,6 +494,33 @@ def test_score_drift_forbidden_tool_returns_violated():
     assert a.tool_name == "forbidden"
 
 
+def test_score_drift_forbidden_path_no_keyerror_on_malformed_all_tools_row():
+    """all_tools entries missing tool_name must not raise KeyError during attribution."""
+    spec = _make_spec(allowed_tools=["ok"])
+    node = object()
+
+    def _fake_extract(_n):
+        return (
+            "T",
+            "body",
+            {
+                "tool_name": "ok",
+                "tool_args": {},
+                "all_tools": [
+                    {"tool_name": "ok"},
+                    {"tool_args": {}},  # no tool_name key → treated as ""
+                ],
+            },
+        )
+
+    with patch("ballast.core.trajectory._extract_node_info", side_effect=_fake_extract):
+        a = score_drift(node, [], spec)
+    assert a.label == "VIOLATED"
+    assert a.tool_score == 0.0
+    # Empty tool name violates allowed_tools; comprehension yields no named offender → primary
+    assert a.tool_name == "ok"
+
+
 def test_score_drift_clean_node_returns_progressing():
     spec = _make_spec_with_irreversible()
     with patch("ballast.core.trajectory.score_constraint_violation", return_value=1.0), \
