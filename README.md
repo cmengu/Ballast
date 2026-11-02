@@ -4,9 +4,12 @@
 
 A spec-verification kernel for long-running multi-agent systems: it locks a run's intent, scores every agent step against it, and applies spec changes mid-run without a restart.
 
-<img src="docs/live-spec-update.gif" alt="Terminal recording: the spec server and SpecPoller pick up a second spec and print the injection text" width="760">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/how-it-works-dark.svg">
+  <img src="docs/how-it-works-light.svg" alt="A spec is locked once and its hash is stamped on every node record. At every agent node the worker polls for a new spec, scores the node, probes the claim if the score was clean, then responds: it injects a correction for drift, or sends an irreversible tool through Broker and CEO and stops the run if neither resolves it." width="100%">
+</picture>
 
-<sub>Real run of the spec server and `SpecPoller` with two hand-written specs and no LLM or API key. The second spec is picked up at the next poll and turned into the text an agent would receive. Input is scripted; no agent runs. The recording script is not committed.</sub>
+<sub>One agent node, checked against a spec locked before the run.</sub>
 
 </div>
 
@@ -14,14 +17,7 @@ A spec-verification kernel for long-running multi-agent systems: it locks a run'
 
 Agents drift from their original intent mid-run, and today you only notice afterwards and restart the job. ballast locks the intent before execution, checks every node against it, reports drift as typed events, and lets you change the spec between nodes while the run continues.
 
-## How a run is checked
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/how-it-works-dark.svg">
-  <img src="docs/how-it-works-light.svg" alt="A spec is locked once and its hash is stamped on every node record. At every agent node the worker polls for a new spec, scores the node, probes the claim if the score was clean, then responds: it injects a correction for drift, or sends an irreversible tool through Broker and CEO and stops the run if neither resolves it." width="100%">
-</picture>
-
-The spec server is meant to run on one machine (called M5 in the code) and the agent on another (M2). Both can run on one machine, as in the recording above.
+The spec server is meant to run on one machine (called M5 in the code) and the agent on another (M2). Both can run on one machine.
 
 ## How it works
 

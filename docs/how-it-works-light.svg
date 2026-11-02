@@ -1,32 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 330" width="1100" height="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d"><title id="t">How a ballast run is checked against a locked spec</title><desc id="d">A spec is locked once and its hash travels with the run. At every agent node the worker polls for a new spec, scores the node, optionally probes the claim, then responds: a correction is injected for drift, or an irreversible tool goes through Broker and CEO and stops the run if neither resolves it.</desc>
-<path d="M30 100H1060" stroke="#8c959f" stroke-width="2" fill="none"/><path d="M1056 94L1068 100L1056 106Z" fill="#8c959f"/>
-<path d="M940 100V40H340V90" stroke="#8c959f" stroke-width="1.2" stroke-dasharray="4 4" fill="none"/><path d="M334 86L340 96L346 86Z" fill="#8c959f"/><text x="640" y="32" font-size="13" text-anchor="middle" fill="#59636e">next node</text>
-<circle cx="30" cy="100" r="5" fill="#8c959f"/>
-<circle cx="340" cy="100" r="5" fill="#8c959f"/>
-<circle cx="490" cy="100" r="5" fill="#8c959f"/>
-<circle cx="640" cy="100" r="5" fill="#8c959f"/>
-<circle cx="790" cy="100" r="5" fill="#8c959f"/>
-<circle cx="940" cy="100" r="5" fill="#8c959f"/>
-<path d="M190 100V118" stroke="#1f5fa8" stroke-width="3"/><path d="M174 118H206L214 150H166Z" fill="#1f5fa8"/><circle cx="190" cy="100" r="6" fill="#1f5fa8"/>
-<text x="30" y="76" font-size="16" font-weight="600" fill="#1f2328">spec.md</text>
-<text x="30" y="128" font-size="13" fill="#59636e">intent, success</text>
-<text x="30" y="146" font-size="13" fill="#59636e">criteria, constraints</text>
-<text x="190" y="76" font-size="16" font-weight="600" fill="#1f2328">lock()</text>
-<text x="340" y="76" font-size="16" font-weight="600" fill="#1f2328">poll server</text>
-<text x="340" y="128" font-size="13" fill="#59636e">new hash? inject</text>
-<text x="340" y="146" font-size="13" fill="#59636e">the diff as text</text>
-<text x="490" y="76" font-size="16" font-weight="600" fill="#1f2328">score the node</text>
-<text x="490" y="128" font-size="13" fill="#59636e">tool rule, 2 LLM</text>
-<text x="490" y="146" font-size="13" fill="#59636e">judges, take the min</text>
-<text x="640" y="76" font-size="16" font-weight="600" fill="#1f2328">probe</text>
-<text x="640" y="128" font-size="13" fill="#59636e">only if the score</text>
-<text x="640" y="146" font-size="13" fill="#59636e">was clean</text>
-<text x="790" y="76" font-size="16" font-weight="600" fill="#1f2328">respond</text>
-<text x="940" y="76" font-size="16" font-weight="600" fill="#1f2328">checkpoint</text>
-<text x="940" y="128" font-size="13" fill="#59636e">every 10 nodes</text>
-<text x="940" y="146" font-size="13" fill="#59636e">by default</text>
-<text x="30" y="182" font-size="13" fill="#59636e">the 16-char hash of every field is</text><text x="30" y="200" font-size="13" fill="#59636e">stamped on every node record</text>
-<path d="M790 100V198q0 8 8 8H806" stroke="#8c959f" stroke-width="1.5" fill="none"/><path d="M790 100V268q0 8 8 8H806" stroke="#8c959f" stroke-width="1.5" fill="none"/>
-<text x="816" y="204" font-size="14" fill="#1f2328">Score under threshold: inject a</text><text x="816" y="222" font-size="14" fill="#1f2328">correction, the run keeps going</text>
-<text x="816" y="274" font-size="14" fill="#1f2328">Irreversible tool: Broker, then CEO</text><text x="816" y="292" font-size="14" fill="#1f2328">(both Haiku). Unresolved: HardInterrupt</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 350" width="1100" height="350" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d"><title id="t">How a ballast run is checked against a locked spec</title><desc id="d">A spec is locked once and its hash is stamped on every node record. At every agent node the worker polls for a new spec, scores the node, probes the claim if the score was clean, then responds: it injects a correction for drift, or sends an irreversible tool through Broker and CEO and stops the run if neither resolves it.</desc>
+<path d="M30 110H1062" stroke="#8c959f" stroke-width="2.5" fill="none"/><path d="M1056 103L1070 110L1056 117Z" fill="#8c959f"/>
+<path d="M930 110V42H320V100" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 5" fill="none"/><path d="M313 96L320 108L327 96Z" fill="#8c959f"/><text x="625" y="32" font-size="17" text-anchor="middle" fill="#59636e">next node</text>
+<circle cx="30" cy="110" r="6" fill="#8c959f"/>
+<text x="30" y="82" font-size="22" font-weight="600" fill="#1f2328">spec.md</text>
+<text x="30" y="138" font-size="17" fill="#59636e">intent, criteria,</text>
+<text x="30" y="160" font-size="17" fill="#59636e">constraints</text>
+<path d="M215 110V128" stroke="#1f5fa8" stroke-width="3"/><path d="M198 128H232L241 162H189Z" fill="#1f5fa8"/><circle cx="215" cy="110" r="7" fill="#1f5fa8"/>
+<text x="215" y="82" font-size="22" font-weight="600" fill="#1f2328">lock()</text>
+<circle cx="320" cy="110" r="6" fill="#8c959f"/>
+<text x="320" y="82" font-size="22" font-weight="600" fill="#1f2328">poll</text>
+<text x="320" y="138" font-size="17" fill="#59636e">new hash?</text>
+<text x="320" y="160" font-size="17" fill="#59636e">inject the diff</text>
+<circle cx="470" cy="110" r="6" fill="#8c959f"/>
+<text x="470" y="82" font-size="22" font-weight="600" fill="#1f2328">score</text>
+<text x="470" y="138" font-size="17" fill="#59636e">tool rule + 2 LLM</text>
+<text x="470" y="160" font-size="17" fill="#59636e">judges, take min</text>
+<circle cx="620" cy="110" r="6" fill="#8c959f"/>
+<text x="620" y="82" font-size="22" font-weight="600" fill="#1f2328">probe</text>
+<text x="620" y="138" font-size="17" fill="#59636e">only if the</text>
+<text x="620" y="160" font-size="17" fill="#59636e">score was clean</text>
+<circle cx="770" cy="110" r="6" fill="#8c959f"/>
+<text x="770" y="82" font-size="22" font-weight="600" fill="#1f2328">respond</text>
+<circle cx="930" cy="110" r="6" fill="#8c959f"/>
+<text x="930" y="82" font-size="22" font-weight="600" fill="#1f2328">checkpoint</text>
+<text x="930" y="138" font-size="17" fill="#59636e">every 10 nodes</text>
+<text x="930" y="160" font-size="17" fill="#59636e">by default</text>
+<text x="30" y="212" font-size="17" fill="#59636e">16-char hash of the locked spec</text><text x="30" y="234" font-size="17" fill="#59636e">is stamped on every node record</text>
+<path d="M770 110V222q0 8 8 8H788" stroke="#8c959f" stroke-width="1.5" fill="none"/><path d="M770 110V296q0 8 8 8H788" stroke="#8c959f" stroke-width="1.5" fill="none"/>
+<text x="798" y="228" font-size="18" fill="#1f2328">Score under threshold: inject</text>
+<text x="798" y="250" font-size="18" fill="#1f2328">a correction, the run goes on</text>
+<text x="798" y="296" font-size="18" fill="#1f2328">Irreversible tool: Broker, then</text>
+<text x="798" y="318" font-size="18" fill="#1f2328">CEO (both Haiku). Unresolved:</text>
+<text x="798" y="340" font-size="18" fill="#1f2328">HardInterrupt, the run stops</text>
 </svg>
