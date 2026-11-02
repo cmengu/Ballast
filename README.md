@@ -110,6 +110,8 @@ timeout before CEO decides: 300 seconds
 - tool_name
 ```
 
+`parse_spec` reads the timeout line into `harness.escalation_timeout_seconds`, but nothing else in `ballast/` uses that field yet.
+
 ---
 
 ## Project layout
