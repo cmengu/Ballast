@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 330" width="1100" height="330" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d"><title id="t">How a ballast run is checked against a locked spec</title><desc id="d">A spec is locked once and its hash travels with the run. At every agent node the worker polls for a new spec, scores the node, optionally probes the claim, then responds: a correction is injected for drift, or an irreversible tool goes through Broker and CEO and stops the run if neither resolves it.</desc>
+<path d="M30 100H1060" stroke="#6e7681" stroke-width="2" fill="none"/><path d="M1056 94L1068 100L1056 106Z" fill="#6e7681"/>
+<path d="M940 100V40H340V90" stroke="#6e7681" stroke-width="1.2" stroke-dasharray="4 4" fill="none"/><path d="M334 86L340 96L346 86Z" fill="#6e7681"/><text x="640" y="32" font-size="13" text-anchor="middle" fill="#9198a1">next node</text>
+<circle cx="30" cy="100" r="5" fill="#6e7681"/>
+<circle cx="340" cy="100" r="5" fill="#6e7681"/>
+<circle cx="490" cy="100" r="5" fill="#6e7681"/>
+<circle cx="640" cy="100" r="5" fill="#6e7681"/>
+<circle cx="790" cy="100" r="5" fill="#6e7681"/>
+<circle cx="940" cy="100" r="5" fill="#6e7681"/>
+<path d="M190 100V118" stroke="#6aa6e8" stroke-width="3"/><path d="M174 118H206L214 150H166Z" fill="#6aa6e8"/><circle cx="190" cy="100" r="6" fill="#6aa6e8"/>
+<text x="30" y="76" font-size="16" font-weight="600" fill="#e6edf3">spec.md</text>
+<text x="30" y="128" font-size="13" fill="#9198a1">intent, success</text>
+<text x="30" y="146" font-size="13" fill="#9198a1">criteria, constraints</text>
+<text x="190" y="76" font-size="16" font-weight="600" fill="#e6edf3">lock()</text>
+<text x="340" y="76" font-size="16" font-weight="600" fill="#e6edf3">poll server</text>
+<text x="340" y="128" font-size="13" fill="#9198a1">new hash? inject</text>
+<text x="340" y="146" font-size="13" fill="#9198a1">the diff as text</text>
+<text x="490" y="76" font-size="16" font-weight="600" fill="#e6edf3">score the node</text>
+<text x="490" y="128" font-size="13" fill="#9198a1">tool rule, 2 LLM</text>
+<text x="490" y="146" font-size="13" fill="#9198a1">judges, take the min</text>
+<text x="640" y="76" font-size="16" font-weight="600" fill="#e6edf3">probe</text>
+<text x="640" y="128" font-size="13" fill="#9198a1">only if the score</text>
+<text x="640" y="146" font-size="13" fill="#9198a1">was clean</text>
+<text x="790" y="76" font-size="16" font-weight="600" fill="#e6edf3">respond</text>
+<text x="940" y="76" font-size="16" font-weight="600" fill="#e6edf3">checkpoint</text>
+<text x="940" y="128" font-size="13" fill="#9198a1">every 10 nodes</text>
+<text x="940" y="146" font-size="13" fill="#9198a1">by default</text>
+<text x="30" y="182" font-size="13" fill="#9198a1">the 16-char hash of every field is</text><text x="30" y="200" font-size="13" fill="#9198a1">stamped on every node record</text>
+<path d="M790 100V198q0 8 8 8H806" stroke="#6e7681" stroke-width="1.5" fill="none"/><path d="M790 100V268q0 8 8 8H806" stroke="#6e7681" stroke-width="1.5" fill="none"/>
+<text x="816" y="204" font-size="14" fill="#e6edf3">Score under threshold: inject a</text><text x="816" y="222" font-size="14" fill="#e6edf3">correction, the run keeps going</text>
+<text x="816" y="274" font-size="14" fill="#e6edf3">Irreversible tool: Broker, then CEO</text><text x="816" y="292" font-size="14" fill="#e6edf3">(both Haiku). Unresolved: HardInterrupt</text>
+</svg>
